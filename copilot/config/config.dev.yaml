@@ -1,0 +1,3 @@
+logger:
+  dir: "/data/agent_backend/logs"
+  level: "debug"
