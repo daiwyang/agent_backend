@@ -1,3 +1,10 @@
 logger:
   dir: "/data/agent_backend/logs"
   level: "debug"
+
+redis:
+  host: "localhost"
+  port: 6379
+  db: 0
+  password: null
+  max_connections: 10

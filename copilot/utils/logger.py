@@ -35,13 +35,7 @@ def set_logger(name):
     # 控制台日志使用彩色格式
     console_format = colorlog.ColoredFormatter(
         "%(blue)s%(asctime)s%(reset)s - %(log_color)s%(levelname)s%(reset)s - %(message)s",
-        log_colors={
-            "DEBUG": "cyan",
-            "INFO": "green",
-            "WARNING": "yellow",
-            "ERROR": "red",
-            "CRITICAL": "red,bg_white",
-        },
+        log_colors={"DEBUG": "cyan", "INFO": "green", "WARNING": "yellow", "ERROR": "red", "CRITICAL": "red,bg_white"},
         secondary_log_colors={"asctime": {"": "blue"}},
         reset=True,
     )
