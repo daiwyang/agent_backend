@@ -8,3 +8,15 @@ redis:
   db: 0
   password: null
   max_connections: 10
+
+mongodb:
+  host: "localhost"
+  port: 27017
+  database: "copilot"
+  username: "root"
+  password: "123456"
+  auth_source: "admin"
+  max_pool_size: 10
+  min_pool_size: 1
+  connect_timeout: 30000
+  server_selection_timeout: 30000
