@@ -8,13 +8,6 @@ services:
     environment:
       MONGO_INITDB_ROOT_USERNAME: root
       MONGO_INITDB_ROOT_PASSWORD: 123456
-    ports:
-      - "27017:27017"
+    network_mode: host
     volumes:
       - /data/docker/volumes/mongo:/data/db
-    networks:
-      - mongo_network
-
-networks:
-  mongo_network:
-    driver: bridge
