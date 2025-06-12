@@ -1,9 +1,6 @@
 import asyncio
 import json
 import time
-import urllib.parse
-import urllib.request
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Union
 
 import aiohttp

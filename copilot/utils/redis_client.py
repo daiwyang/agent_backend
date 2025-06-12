@@ -95,21 +95,3 @@ class RedisClient:
         except RedisError as e:
             logger.error(f"Redis PING failed: {str(e)}")
             return False
-
-
-async def test_redis():
-    """测试Redis客户端"""
-    redis = RedisClient()
-    async with redis:
-        print("PING:", await redis.ping())
-        await redis.set("test_key", "test_value", ex=10)
-        print("GET:", await redis.get("test_key"))
-        print("EXISTS:", await redis.exists("test_key"))
-        await redis.delete("test_key")
-        print("AFTER DELETE - EXISTS:", await redis.exists("test_key"))
-
-
-if __name__ == "__main__":
-    import asyncio
-
-    asyncio.run(test_redis())
