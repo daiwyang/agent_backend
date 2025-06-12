@@ -4,12 +4,12 @@
 
 ## 📋 目录
 
-- [环境准备](#环境准备)
-- [配置说明](#配置说明) 
-- [基本使用](#基本使用)
-- [API参考](#api参考)
-- [示例代码](#示例代码)
-- [常见问题](#常见问题)
+- [环境准备](#-环境准备)
+- [配置说明](#️-配置说明)
+- [基本使用](#-基本使用)
+- [API参考](#-api参考)
+- [示例代码](#-示例代码)
+- [常见问题](#-常见问题)
 
 ## 🚀 环境准备
 
@@ -28,6 +28,7 @@ docker-compose up -d mongodb
 ```
 
 MongoDB服务配置：
+
 - 端口: 27017
 - 用户名: root
 - 密码: 123456
@@ -240,6 +241,7 @@ python copilot/examples/mongo_example.py
 **问题**: `PyMongoError: [Errno 111] Connection refused`
 
 **解决方案**:
+
 - 确保MongoDB服务已启动: `docker-compose up -d mongodb`
 - 检查配置文件中的主机和端口设置
 - 确认防火墙设置
@@ -249,6 +251,7 @@ python copilot/examples/mongo_example.py
 **问题**: `PyMongoError: Authentication failed`
 
 **解决方案**:
+
 - 检查配置中的用户名和密码
 - 确认认证数据库设置正确
 - 验证MongoDB用户权限
@@ -258,6 +261,7 @@ python copilot/examples/mongo_example.py
 **问题**: `ModuleNotFoundError: No module named 'motor'`
 
 **解决方案**:
+
 ```bash
 pip install motor pymongo
 ```
@@ -267,6 +271,7 @@ pip install motor pymongo
 **问题**: 重复创建相同索引
 
 **解决方案**:
+
 - 索引已存在时会抛出异常，这是正常行为
 - 可以使用 `try-except` 处理重复创建的情况
 
@@ -275,6 +280,7 @@ pip install motor pymongo
 **问题**: Pylance类型检查警告
 
 **解决方案**:
+
 - 这些警告不影响代码运行
 - 确保安装了motor和pymongo依赖包
 - 可以在开发环境中忽略这些警告

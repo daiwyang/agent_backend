@@ -7,16 +7,19 @@
 ## 核心概念
 
 ### 1. 会话(Session)
+
 - **定义**: 一次完整的对话过程，从用户开始对话到结束对话
 - **特点**: 每个会话有唯一的ID，维护独立的对话历史和上下文
 - **生命周期**: 创建 → 活跃对话 → 超时或手动删除
 
 ### 2. 多窗口支持
+
 - **场景**: 同一用户可能在多个设备/窗口同时与Agent对话
 - **实现**: 通过`user_id` + `window_id`区分不同的对话会话
 - **优势**: 用户可以在桌面和手机上同时进行不同主题的对话
 
 ### 3. 会话管理
+
 - **会话存储**: 使用Redis存储会话信息（生产环境）或内存存储（演示）
 - **会话超时**: 自动清理长时间未活跃的会话
 - **会话查询**: 支持查询用户的所有活跃会话
@@ -25,24 +28,31 @@
 
 ### 系统组件
 
-```
+```text
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   客户端应用    │    │   FastAPI服务   │    │   会话管理器    │
+│   Client Apps   │    │  FastAPI Server │    │ Session Manager │
 │                 │    │                 │    │                 │
-│ - Web界面       │───▶│ - HTTP API      │───▶│ - Redis存储     │
-│ - 移动APP       │    │ - 路由处理      │    │ - 会话CRUD      │
-│ - 桌面应用      │    │ - 请求验证      │    │ - 超时清理      │
+│ - Web UI        │───▶│ - HTTP API      │───▶│ - Redis Storage │
+│ - Mobile App    │    │ - Route Handler │    │ - Session CRUD  │
+│ - Desktop App   │    │ - Validation    │    │ - Auto Cleanup  │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
                                 │
                                 ▼
                        ┌─────────────────┐
-                       │  LangGraph Agent │
+                       │ LangGraph Agent │
                        │                 │
-                       │ - 多轮对话      │
-                       │ - 工具调用      │
-                       │ - 记忆保存      │
+                       │ - Multi-turn    │
+                       │ - Tool Calling  │
+                       │ - Memory Save   │
                        └─────────────────┘
 ```
+
+**组件说明**：
+
+- **Client Apps**: 客户端应用（Web界面、移动APP、桌面应用）
+- **FastAPI Server**: FastAPI服务（HTTP API、路由处理、请求验证）
+- **Session Manager**: 会话管理器（Redis存储、会话CRUD、超时清理）
+- **LangGraph Agent**: LangGraph代理（多轮对话、工具调用、记忆保存）
 
 ### 数据流
 
@@ -73,6 +83,7 @@ class SessionManager:
 ```
 
 **关键特性**:
+
 - 基于Redis的分布式会话存储
 - 自动超时清理机制
 - 支持用户多会话查询
@@ -98,6 +109,7 @@ class MultiSessionAgent:
 ```
 
 **关键特性**:
+
 - 基于LangGraph的对话管理
 - 支持流式响应
 - 独立的线程ID确保会话隔离
@@ -120,6 +132,7 @@ async def get_user_sessions(user_id: str):
 ```
 
 **关键特性**:
+
 - RESTful API设计
 - 请求/响应模型验证
 - CORS支持
@@ -147,11 +160,13 @@ mobile_response = await agent.chat(mobile_session, "介绍一下Python")
 ### 2. 多窗口场景
 
 **用户Alice的使用场景**:
+
 1. 在桌面浏览器查询天气信息
 2. 同时在手机APP学习编程知识
 3. 两个对话保持独立的上下文
 
 **实现代码**:
+
 ```python
 # Alice桌面会话 - 天气主题
 alice_desktop = await agent.create_session("alice", "desktop_browser")
@@ -261,16 +276,19 @@ python -m copilot.tasks.cleanup_sessions
 ## 扩展功能
 
 ### 1. 会话分析
+
 - 统计会话数量和时长
 - 分析用户对话模式
 - 监控系统性能指标
 
 ### 2. 个性化
+
 - 基于历史对话的个性化响应
 - 用户偏好学习和记忆
 - 上下文感知的智能推荐
 
 ### 3. 集成能力
+
 - 与第三方系统集成
 - 支持Webhook通知
 - 多模态对话支持（文本、语音、图片）
@@ -278,17 +296,20 @@ python -m copilot.tasks.cleanup_sessions
 ## 监控和维护
 
 ### 1. 关键指标
+
 - 活跃会话数量
 - 平均响应时间
 - 错误率
 - 内存和CPU使用率
 
 ### 2. 日志管理
+
 - 结构化日志输出
 - 错误追踪和告警
 - 性能监控数据
 
 ### 3. 故障恢复
+
 - 会话数据备份
 - 服务重启策略
 - 降级方案
