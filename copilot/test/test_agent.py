@@ -4,7 +4,7 @@ import os
 import uuid
 from datetime import datetime
 
-os.environ["DEEPSEEK_API_KEY"] = "sk-0b06b15af19c4b009f7f44fe04abdabd"
+os.environ["DEEPSEEK_API_KEY"] = ""
 
 
 def check_weather(location: str) -> str:
