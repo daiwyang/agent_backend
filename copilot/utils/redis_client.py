@@ -95,3 +95,43 @@ class RedisClient:
         except RedisError as e:
             logger.error(f"Redis PING failed: {str(e)}")
             return False
+
+    async def sadd(self, key: str, *values: str) -> int:
+        """向集合添加元素"""
+        if self._client is None:
+            raise RuntimeError("Redis client not initialized")
+        try:
+            return await self._client.sadd(key, *values)
+        except RedisError as e:
+            logger.error(f"Redis SADD {key} failed: {str(e)}")
+            raise
+
+    async def smembers(self, key: str) -> set:
+        """获取集合所有元素"""
+        if self._client is None:
+            raise RuntimeError("Redis client not initialized")
+        try:
+            return await self._client.smembers(key)
+        except RedisError as e:
+            logger.error(f"Redis SMEMBERS {key} failed: {str(e)}")
+            raise
+
+    async def srem(self, key: str, *values: str) -> int:
+        """从集合删除元素"""
+        if self._client is None:
+            raise RuntimeError("Redis client not initialized")
+        try:
+            return await self._client.srem(key, *values)
+        except RedisError as e:
+            logger.error(f"Redis SREM {key} failed: {str(e)}")
+            raise
+
+    async def keys(self, pattern: str) -> list:
+        """获取匹配模式的键"""
+        if self._client is None:
+            raise RuntimeError("Redis client not initialized")
+        try:
+            return await self._client.keys(pattern)
+        except RedisError as e:
+            logger.error(f"Redis KEYS {pattern} failed: {str(e)}")
+            raise
