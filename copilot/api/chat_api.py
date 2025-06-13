@@ -2,79 +2,29 @@
 基于FastAPI的多会话聊天API
 """
 
-from fastapi import FastAPI, HTTPException, Depends, Query
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
-import asyncio
-import uuid
 from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 
 # 导入实际的会话管理器和Agent
 from copilot.agent.multi_session_agent import MultiSessionAgent
 from copilot.agent.session_manager import session_manager
-
+from copilot.model.chat_model import (
+    ChatHistoryResponse,
+    ChatMessage,
+    ChatRequest,
+    ChatResponse,
+    CreateSessionRequest,
+    CreateSessionResponse,
+    SearchRequest,
+    SearchResult,
+    SessionInfo,
+)
 
 # 创建全局Agent实例
 agent = MultiSessionAgent()
-
-
-# Pydantic模型
-class CreateSessionRequest(BaseModel):
-    user_id: str
-    window_id: Optional[str] = None
-
-
-class CreateSessionResponse(BaseModel):
-    session_id: str
-    user_id: str
-    window_id: str
-    thread_id: str
-
-
-class ChatRequest(BaseModel):
-    session_id: str
-    message: str
-
-
-class ChatResponse(BaseModel):
-    session_id: str
-    response: str
-    timestamp: datetime
-
-
-class SessionInfo(BaseModel):
-    session_id: str
-    user_id: str
-    window_id: str
-    created_at: datetime
-    last_activity: datetime
-
-
-class ChatMessage(BaseModel):
-    role: str
-    content: str
-    timestamp: Optional[str] = None
-
-
-class ChatHistoryResponse(BaseModel):
-    session_id: str
-    messages: List[ChatMessage]
-    total_count: int
-
-
-class SearchRequest(BaseModel):
-    user_id: str
-    query: str
-    limit: Optional[int] = 20
-
-
-class SearchResult(BaseModel):
-    session_id: str
-    role: str
-    content: str
-    timestamp: datetime
-
 
 # FastAPI应用
 app = FastAPI(title="Multi-Session Chat API", version="1.0.0")
@@ -96,12 +46,7 @@ async def create_session(request: CreateSessionRequest):
         session_id = await agent.create_session(request.user_id, request.window_id)
         session = await session_manager.get_session(session_id)
 
-        return CreateSessionResponse(
-            session_id=session_id, 
-            user_id=session.user_id, 
-            window_id=session.window_id, 
-            thread_id=session.thread_id
-        )
+        return CreateSessionResponse(session_id=session_id, user_id=session.user_id, window_id=session.window_id, thread_id=session.thread_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -111,15 +56,11 @@ async def chat(request: ChatRequest):
     """发送聊天消息"""
     try:
         response = await agent.chat(request.session_id, request.message)
-        
+
         # 取第一个响应消息
         response_text = response.messages[0].content if response.messages else "无响应"
-        
-        return ChatResponse(
-            session_id=request.session_id, 
-            response=response_text, 
-            timestamp=datetime.now()
-        )
+
+        return ChatResponse(session_id=request.session_id, response=response_text, timestamp=datetime.now())
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -128,30 +69,23 @@ async def chat(request: ChatRequest):
 
 @app.get("/sessions/{session_id}/history", response_model=ChatHistoryResponse)
 async def get_chat_history(
-    session_id: str, 
+    session_id: str,
     from_db: bool = Query(False, description="是否从数据库获取完整历史"),
     limit: int = Query(100, description="返回消息数量限制"),
-    offset: int = Query(0, description="偏移量")
+    offset: int = Query(0, description="偏移量"),
 ):
     """获取会话的聊天历史"""
     try:
         messages = await agent.get_chat_history(session_id, from_db=from_db)
-        
+
         # 应用分页
         total_count = len(messages)
-        paginated_messages = messages[offset:offset + limit]
-        
+        paginated_messages = messages[offset : offset + limit]
+
         return ChatHistoryResponse(
             session_id=session_id,
-            messages=[
-                ChatMessage(
-                    role=msg.role,
-                    content=msg.content,
-                    timestamp=msg.timestamp
-                )
-                for msg in paginated_messages
-            ],
-            total_count=total_count
+            messages=[ChatMessage(role=msg.role, content=msg.content, timestamp=msg.timestamp) for msg in paginated_messages],
+            total_count=total_count,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -190,25 +124,16 @@ async def get_user_chat_history(user_id: str):
 async def search_chat_history(request: SearchRequest):
     """搜索用户的聊天历史"""
     try:
-        results = await agent.search_chat_history(
-            request.user_id, 
-            request.query, 
-            request.limit
-        )
-        
+        results = await agent.search_chat_history(request.user_id, request.query, request.limit)
+
         return {
             "user_id": request.user_id,
             "query": request.query,
             "results": [
-                SearchResult(
-                    session_id=result["session_id"],
-                    role=result["role"],
-                    content=result["content"],
-                    timestamp=result["timestamp"]
-                )
+                SearchResult(session_id=result["session_id"], role=result["role"], content=result["content"], timestamp=result["timestamp"])
                 for result in results
             ],
-            "total_count": len(results)
+            "total_count": len(results),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
