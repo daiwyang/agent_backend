@@ -3,10 +3,9 @@
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import APIRouter, HTTPException, Query
 
 # 导入实际的会话管理器和Agent
 from copilot.agent.multi_session_agent import MultiSessionAgent
@@ -27,19 +26,10 @@ from copilot.model.chat_model import (
 agent = MultiSessionAgent()
 
 # FastAPI应用
-app = FastAPI(title="Multi-Session Chat API", version="1.0.0")
-
-# 添加CORS中间件
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+router = APIRouter(prefix="/chat")
 
 
-@app.post("/sessions", response_model=CreateSessionResponse)
+@router.post("/sessions", response_model=CreateSessionResponse)
 async def create_session(request: CreateSessionRequest):
     """创建新的聊天会话"""
     try:
@@ -51,7 +41,7 @@ async def create_session(request: CreateSessionRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/chat", response_model=ChatResponse)
+@router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     """发送聊天消息"""
     try:
@@ -67,7 +57,7 @@ async def chat(request: ChatRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/sessions/{session_id}/history", response_model=ChatHistoryResponse)
+@router.get("/sessions/{session_id}/history", response_model=ChatHistoryResponse)
 async def get_chat_history(
     session_id: str,
     from_db: bool = Query(False, description="是否从数据库获取完整历史"),
@@ -91,7 +81,7 @@ async def get_chat_history(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/users/{user_id}/sessions", response_model=List[SessionInfo])
+@router.get("/users/{user_id}/sessions", response_model=List[SessionInfo])
 async def get_user_sessions(user_id: str):
     """获取用户的所有活跃会话"""
     try:
@@ -110,7 +100,7 @@ async def get_user_sessions(user_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/users/{user_id}/chat-history")
+@router.get("/users/{user_id}/chat-history")
 async def get_user_chat_history(user_id: str):
     """获取用户的所有聊天历史"""
     try:
@@ -120,7 +110,7 @@ async def get_user_chat_history(user_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/search")
+@router.post("/search")
 async def search_chat_history(request: SearchRequest):
     """搜索用户的聊天历史"""
     try:
@@ -139,7 +129,7 @@ async def search_chat_history(request: SearchRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/stats")
+@router.get("/stats")
 async def get_chat_stats(user_id: Optional[str] = Query(None, description="用户ID（可选）")):
     """获取聊天统计信息"""
     try:
@@ -149,7 +139,7 @@ async def get_chat_stats(user_id: Optional[str] = Query(None, description="用�
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/sessions/{session_id}")
+@router.delete("/sessions/{session_id}")
 async def delete_session(session_id: str, archive: bool = Query(True, description="是否归档到数据库")):
     """删除会话"""
     try:
@@ -159,19 +149,7 @@ async def delete_session(session_id: str, archive: bool = Query(True, descriptio
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/health")
+@router.get("/health")
 async def health_check():
     """健康检查"""
     return {"status": "healthy", "timestamp": datetime.now()}
-
-
-if __name__ == "__main__":
-    import uvicorn
-
-    print("🚀 启动多会话聊天API服务器...")
-    print("📖 API文档: http://localhost:8000/docs")
-    print("💡 使用示例:")
-    print("   1. POST /sessions - 创建会话")
-    print("   2. POST /chat - 发送消息")
-    print("   3. GET /users/{user_id}/sessions - 获取用户会话")
-    uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -1,0 +1,22 @@
+logger:
+  dir: "/data/agent_backend/logs"
+  level: "debug"
+
+redis:
+  host: "10.224.28.66"
+  port: 6379
+  db: 2
+  password: 123456
+  max_connections: 10
+
+mongodb:
+  host: "10.224.28.66"
+  port: 19532
+  database: "test"
+  username: "copilot"
+  password: "p3z8cjm*4B2O"
+  auth_source: "admin"
+  max_pool_size: 10
+  min_pool_size: 1
+  connect_timeout: 30000
+  server_selection_timeout: 30000

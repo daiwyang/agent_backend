@@ -1,13 +1,45 @@
 import time
 import traceback
 import uuid
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from copilot.router import chat_router
 from copilot.utils.logger import logger
+from copilot.utils.mongo_client import get_mongo_manager
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期管理"""
+    # 启动事件：初始化MongoDB连接池
+    try:
+        mongo_manager = await get_mongo_manager()
+        logger.info("MongoDB connection pool initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize MongoDB connection pool: {str(e)}")
+        raise
+
+    yield
+
+    # 关闭事件：清理MongoDB连接
+    try:
+        mongo_manager = await get_mongo_manager()
+        await mongo_manager.close()
+        logger.info("MongoDB connections closed")
+    except Exception as e:
+        logger.warning(f"Error closing MongoDB connections: {str(e)}")
+
+
+app = FastAPI(lifespan=lifespan)
+
+app.include_router(chat_router.router, prefix="/agent_backend", tags=["agent_backend"])
+
+# 添加CORS中间件
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 
 @app.middleware("http")
@@ -40,3 +72,9 @@ async def http_exception_handler(request: Request, exc: Exception):
             "err_detial": str(exc),
         }
     )
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=8000)
