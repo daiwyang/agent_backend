@@ -86,4 +86,12 @@ async def http_exception_handler(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(
+        app, 
+        host="0.0.0.0", 
+        port=8000,
+        # 禁用访问日志减少缓冲
+        access_log=False,
+        # 确保没有响应缓冲
+        timeout_keep_alive=30
+    )

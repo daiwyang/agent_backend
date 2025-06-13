@@ -151,14 +151,57 @@ class MultiSessionAgent:
         inputs = {"messages": [{"role": "user", "content": message}]}
 
         try:
-            for chunk in self.graph.stream(inputs, config=config, stream_mode="updates"):
-                if "agent" in chunk:
-                    for msg in chunk["agent"]["messages"]:
-                        if msg.content:
-                            yield {"session_id": session_id, "role": "assistant", "content": msg.content, "type": "message"}
+            # 使用流式模式获取响应
+            full_response = ""
+            async for chunk in self.graph.astream(inputs, config=config, stream_mode="values"):
+                if "messages" in chunk:
+                    # 获取最新的消息
+                    messages = chunk["messages"]
+                    if messages:
+                        last_message = messages[-1]
+                        # 只处理助手的消息
+                        if hasattr(last_message, 'type') and last_message.type == "ai" and last_message.content:
+                            new_content = last_message.content
+                            if new_content != full_response:
+                                # 如果是完整的新响应，逐字符流式输出
+                                if len(full_response) == 0:
+                                    # 模拟逐字符流式输出
+                                    for i in range(0, len(new_content), 3):  # 每次发送3个字符
+                                        chunk_text = new_content[i:i+3]
+                                        yield {"content": chunk_text}
+                                        await asyncio.sleep(0.05)  # 模拟网络延迟
+                                    full_response = new_content
+                                else:
+                                    # 发送新增的内容
+                                    new_part = new_content[len(full_response):]
+                                    full_response = new_content
+                                    yield {"content": new_part}
+                                    await asyncio.sleep(0.01)
+                        elif hasattr(last_message, 'content') and last_message.content:
+                            # 兼容不同的消息格式
+                            new_content = str(last_message.content)
+                            if new_content != full_response:
+                                # 如果是完整的新响应，逐字符流式输出
+                                if len(full_response) == 0:
+                                    # 模拟逐字符流式输出
+                                    for i in range(0, len(new_content), 3):  # 每次发送3个字符
+                                        chunk_text = new_content[i:i+3]
+                                        yield {"content": chunk_text}
+                                        await asyncio.sleep(0.05)  # 模拟网络延迟
+                                    full_response = new_content
+                                else:
+                                    # 发送新增的内容
+                                    new_part = new_content[len(full_response):]
+                                    full_response = new_content
+                                    yield {"content": new_part}
+                                    await asyncio.sleep(0.01)
+                            
+            # 更新会话活动时间
+            await session_manager.get_session(session_id)
+            
         except Exception as e:
             logger.error(f"Error in chat_stream for session {session_id}: {str(e)}")
-            yield {"session_id": session_id, "error": "处理请求时出现错误", "type": "error"}
+            yield {"error": "处理请求时出现错误"}
 
     async def get_chat_history(self, session_id: str, from_db: bool = False) -> List[ChatMessage]:
         """

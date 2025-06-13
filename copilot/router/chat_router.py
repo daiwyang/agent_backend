@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
 
 # 导入实际的会话管理器和Agent
 from copilot.agent.multi_session_agent import MultiSessionAgent
@@ -41,9 +42,75 @@ async def create_session(request: CreateSessionRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/chat", response_model=ChatResponse)
+@router.post("/chat")
 async def chat(request: ChatRequest):
-    """发送聊天消息"""
+    """发送聊天消息 - HTTP流式响应"""
+    import json
+    import asyncio
+    
+    async def generate_response():
+        try:
+            # 保存用户消息
+            await agent.chat_history_manager.save_message(
+                session_id=request.session_id,
+                role="user", 
+                content=request.message,
+                metadata={"timestamp": datetime.now().isoformat()}
+            )
+            
+            # 发送开始事件并立即刷新
+            start_data = json.dumps({'type': 'start', 'session_id': request.session_id}) + '\n'
+            yield start_data.encode('utf-8')
+            await asyncio.sleep(0.01)  # 小延迟确保数据被发送
+            
+            response_content = ""
+            async for chunk in agent.chat_stream(request.session_id, request.message):
+                if "error" in chunk:
+                    error_data = json.dumps({'type': 'error', 'content': chunk['error']}) + '\n'
+                    yield error_data.encode('utf-8')
+                    break
+                elif "content" in chunk:
+                    response_content += chunk["content"]
+                    content_data = json.dumps({'type': 'content', 'content': chunk['content']}) + '\n'
+                    yield content_data.encode('utf-8')
+                    await asyncio.sleep(0.01)  # 小延迟确保流式输出
+            
+            # 保存完整的助手响应
+            if response_content:
+                await agent.chat_history_manager.save_message(
+                    session_id=request.session_id,
+                    role="assistant",
+                    content=response_content, 
+                    metadata={"timestamp": datetime.now().isoformat()}
+                )
+            
+            # 发送结束事件
+            end_data = json.dumps({'type': 'end', 'session_id': request.session_id}) + '\n'
+            yield end_data.encode('utf-8')
+            
+        except ValueError as e:
+            error_data = json.dumps({'type': 'error', 'content': str(e)}) + '\n'
+            yield error_data.encode('utf-8')
+        except Exception as e:
+            error_data = json.dumps({'type': 'error', 'content': '处理请求时出现错误'}) + '\n'
+            yield error_data.encode('utf-8')
+
+    return StreamingResponse(
+        generate_response(),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Transfer-Encoding": "chunked",
+            "X-Accel-Buffering": "no",  # 禁用Nginx缓冲
+            "Content-Encoding": "identity"  # 禁用压缩
+        }
+    )
+
+
+@router.post("/chat/non-stream", response_model=ChatResponse)
+async def chat_non_stream(request: ChatRequest):
+    """发送聊天消息 - 非流式响应（向后兼容）"""
     try:
         response = await agent.chat(request.session_id, request.message)
 
