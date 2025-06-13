@@ -1,0 +1,51 @@
+# GitHub Copilot Ignore Rules
+# 禁止 Copilot 对以下文件和目录提供建议
+
+# 测试文件和目录
+test_*.py
+*_test.py
+tests/
+test/
+conftest.py
+**/*test*.py
+**/*tests*
+
+# 临时文件和缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.log
+*.log.*
+
+# 环境和配置敏感文件
+.env
+.envrc
+.venv/
+venv/
+*.key
+*.pem
+*.secret
+
+# 构建和分发文件
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# IDE 和编辑器文件
+.vscode/launch.json
+.vscode/tasks.json
+.idea/
+*.swp
+*.swo
+*~
+
+# 版本控制
+.git/
+.gitignore
+
+# 文档构建文件
+docs/_build/
+site/
