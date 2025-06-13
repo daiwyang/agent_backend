@@ -1,7 +1,8 @@
 """
 基于FastAPI的多会话聊天API
 """
-from fastapi import FastAPI, HTTPException, Depends
+
+from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
@@ -9,66 +10,20 @@ import asyncio
 import uuid
 from datetime import datetime
 
-# 简化版的会话管理器（生产环境应该使用Redis）
-class InMemorySessionManager:
-    def __init__(self):
-        self.sessions: Dict[str, Dict[str, Any]] = {}
-        self.user_sessions: Dict[str, List[str]] = {}  # user_id -> [session_ids]
-    
-    async def create_session(self, user_id: str, window_id: str = None) -> str:
-        session_id = str(uuid.uuid4())
-        thread_id = f"{user_id}_{session_id}"
-        
-        if window_id is None:
-            window_id = str(uuid.uuid4())
-        
-        session_data = {
-            "session_id": session_id,
-            "user_id": user_id,
-            "window_id": window_id,
-            "thread_id": thread_id,
-            "created_at": datetime.now(),
-            "last_activity": datetime.now(),
-            "context": {}
-        }
-        
-        self.sessions[session_id] = session_data
-        
-        # 维护用户会话列表
-        if user_id not in self.user_sessions:
-            self.user_sessions[user_id] = []
-        self.user_sessions[user_id].append(session_id)
-        
-        return session_id
-    
-    async def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
-        session = self.sessions.get(session_id)
-        if session:
-            session["last_activity"] = datetime.now()
-        return session
-    
-    async def get_user_sessions(self, user_id: str) -> List[Dict[str, Any]]:
-        session_ids = self.user_sessions.get(user_id, [])
-        return [self.sessions[sid] for sid in session_ids if sid in self.sessions]
-    
-    async def delete_session(self, session_id: str):
-        if session_id in self.sessions:
-            user_id = self.sessions[session_id]["user_id"]
-            del self.sessions[session_id]
-            
-            if user_id in self.user_sessions:
-                self.user_sessions[user_id] = [
-                    sid for sid in self.user_sessions[user_id] if sid != session_id
-                ]
+# 导入实际的会话管理器和Agent
+from copilot.agent.multi_session_agent import MultiSessionAgent
+from copilot.agent.session_manager import session_manager
 
 
-# 全局会话管理器
-session_manager = InMemorySessionManager()
+# 创建全局Agent实例
+agent = MultiSessionAgent()
+
 
 # Pydantic模型
 class CreateSessionRequest(BaseModel):
     user_id: str
     window_id: Optional[str] = None
+
 
 class CreateSessionResponse(BaseModel):
     session_id: str
@@ -76,14 +31,17 @@ class CreateSessionResponse(BaseModel):
     window_id: str
     thread_id: str
 
+
 class ChatRequest(BaseModel):
     session_id: str
     message: str
+
 
 class ChatResponse(BaseModel):
     session_id: str
     response: str
     timestamp: datetime
+
 
 class SessionInfo(BaseModel):
     session_id: str
@@ -91,6 +49,32 @@ class SessionInfo(BaseModel):
     window_id: str
     created_at: datetime
     last_activity: datetime
+
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+    timestamp: Optional[str] = None
+
+
+class ChatHistoryResponse(BaseModel):
+    session_id: str
+    messages: List[ChatMessage]
+    total_count: int
+
+
+class SearchRequest(BaseModel):
+    user_id: str
+    query: str
+    limit: Optional[int] = 20
+
+
+class SearchResult(BaseModel):
+    session_id: str
+    role: str
+    content: str
+    timestamp: datetime
+
 
 # FastAPI应用
 app = FastAPI(title="Multi-Session Chat API", version="1.0.0")
@@ -104,87 +88,161 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.post("/sessions", response_model=CreateSessionResponse)
 async def create_session(request: CreateSessionRequest):
     """创建新的聊天会话"""
     try:
-        session_id = await session_manager.create_session(
-            request.user_id, request.window_id
-        )
+        session_id = await agent.create_session(request.user_id, request.window_id)
         session = await session_manager.get_session(session_id)
-        
+
         return CreateSessionResponse(
-            session_id=session_id,
-            user_id=session["user_id"],
-            window_id=session["window_id"],
-            thread_id=session["thread_id"]
+            session_id=session_id, 
+            user_id=session.user_id, 
+            window_id=session.window_id, 
+            thread_id=session.thread_id
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     """发送聊天消息"""
-    session = await session_manager.get_session(request.session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
     try:
-        # 这里应该调用您的Agent
-        # 为了演示，我们返回一个模拟响应
-        response_text = f"收到消息: {request.message}"
+        response = await agent.chat(request.session_id, request.message)
         
-        # 如果消息包含天气相关词汇，返回天气信息
-        if "天气" in request.message:
-            if "北京" in request.message:
-                response_text = "北京今天晴天，温度25°C"
-            elif "上海" in request.message:
-                response_text = "上海今天多云，温度22°C"
-            else:
-                response_text = "请告诉我您想查询哪个城市的天气？"
+        # 取第一个响应消息
+        response_text = response.messages[0].content if response.messages else "无响应"
         
         return ChatResponse(
-            session_id=request.session_id,
-            response=response_text,
+            session_id=request.session_id, 
+            response=response_text, 
             timestamp=datetime.now()
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/sessions/{session_id}/history", response_model=ChatHistoryResponse)
+async def get_chat_history(
+    session_id: str, 
+    from_db: bool = Query(False, description="是否从数据库获取完整历史"),
+    limit: int = Query(100, description="返回消息数量限制"),
+    offset: int = Query(0, description="偏移量")
+):
+    """获取会话的聊天历史"""
+    try:
+        messages = await agent.get_chat_history(session_id, from_db=from_db)
+        
+        # 应用分页
+        total_count = len(messages)
+        paginated_messages = messages[offset:offset + limit]
+        
+        return ChatHistoryResponse(
+            session_id=session_id,
+            messages=[
+                ChatMessage(
+                    role=msg.role,
+                    content=msg.content,
+                    timestamp=msg.timestamp
+                )
+                for msg in paginated_messages
+            ],
+            total_count=total_count
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.get("/users/{user_id}/sessions", response_model=List[SessionInfo])
 async def get_user_sessions(user_id: str):
-    """获取用户的所有会话"""
+    """获取用户的所有活跃会话"""
     try:
-        sessions = await session_manager.get_user_sessions(user_id)
+        sessions = await agent.get_user_sessions(user_id)
         return [
             SessionInfo(
-                session_id=session["session_id"],
-                user_id=session["user_id"],
-                window_id=session["window_id"],
-                created_at=session["created_at"],
-                last_activity=session["last_activity"]
+                session_id=session.session_id,
+                user_id=session.user_id,
+                window_id=session.window_id,
+                created_at=session.created_at,
+                last_activity=session.last_activity,
             )
             for session in sessions
         ]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.delete("/sessions/{session_id}")
-async def delete_session(session_id: str):
-    """删除会话"""
+
+@app.get("/users/{user_id}/chat-history")
+async def get_user_chat_history(user_id: str):
+    """获取用户的所有聊天历史"""
     try:
-        await session_manager.delete_session(session_id)
-        return {"message": "Session deleted successfully"}
+        history = await agent.get_user_chat_history(user_id)
+        return {"user_id": user_id, "sessions": history}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/search")
+async def search_chat_history(request: SearchRequest):
+    """搜索用户的聊天历史"""
+    try:
+        results = await agent.search_chat_history(
+            request.user_id, 
+            request.query, 
+            request.limit
+        )
+        
+        return {
+            "user_id": request.user_id,
+            "query": request.query,
+            "results": [
+                SearchResult(
+                    session_id=result["session_id"],
+                    role=result["role"],
+                    content=result["content"],
+                    timestamp=result["timestamp"]
+                )
+                for result in results
+            ],
+            "total_count": len(results)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/stats")
+async def get_chat_stats(user_id: Optional[str] = Query(None, description="用户ID（可选）")):
+    """获取聊天统计信息"""
+    try:
+        stats = await agent.get_chat_stats(user_id)
+        return stats
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/sessions/{session_id}")
+async def delete_session(session_id: str, archive: bool = Query(True, description="是否归档到数据库")):
+    """删除会话"""
+    try:
+        await agent.delete_session(session_id)
+        return {"message": f"Session deleted successfully (archived: {archive})"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/health")
 async def health_check():
     """健康检查"""
     return {"status": "healthy", "timestamp": datetime.now()}
 
+
 if __name__ == "__main__":
     import uvicorn
+
     print("🚀 启动多会话聊天API服务器...")
     print("📖 API文档: http://localhost:8000/docs")
     print("💡 使用示例:")

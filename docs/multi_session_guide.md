@@ -326,3 +326,138 @@ python -m copilot.tasks.cleanup_sessions
 ✅ **易扩展**：模块化设计便于功能扩展  
 
 这个架构可以满足大多数多轮对话应用的需求，并为进一步的功能扩展提供了坚实的基础。
+
+## 聊天历史持久化
+
+### 问题描述
+
+之前的实现中，所有对话数据只存储在Redis中，存在以下问题：
+
+1. **数据丢失风险**: 当会话超时后，所有对话历史都会丢失
+2. **无法追溯**: 用户无法查看之前的对话记录
+3. **体验不连续**: 新会话无法获取历史上下文
+4. **无法分析**: 缺少长期数据用于改进AI服务
+
+### 解决方案
+
+新增了 `ChatHistoryManager` 来实现对话历史的持久化存储：
+
+#### 1. 双层存储架构
+
+- **Redis**: 用于活跃会话的快速访问（临时存储）
+- **MongoDB**: 用于所有对话的长期持久化存储
+
+#### 2. 核心功能
+
+**会话恢复**:
+
+```python
+# 当Redis中的会话过期时，自动从数据库恢复
+session = await session_manager.get_session(session_id)
+# 如果Redis中没有，会自动从MongoDB恢复
+```
+
+**消息持久化**:
+
+```python
+# 每条消息都会同时保存到数据库
+await chat_history_manager.save_message(
+    session_id=session_id,
+    role="user",  # 或 "assistant"
+    content=message,
+    metadata={"timestamp": datetime.now()}
+)
+```
+
+**历史查询**:
+
+```python
+# 获取会话完整历史
+messages = await agent.get_chat_history(session_id, from_db=True)
+
+# 获取用户所有会话
+user_sessions = await agent.get_user_chat_history(user_id)
+
+# 搜索对话内容
+results = await agent.search_chat_history(user_id, "关键词")
+```
+
+#### 3. API接口
+
+新增了以下API端点：
+
+- `GET /sessions/{session_id}/history` - 获取会话历史
+- `GET /users/{user_id}/chat-history` - 获取用户所有对话
+- `POST /search` - 搜索对话内容
+- `GET /stats` - 获取统计信息
+
+#### 4. 数据库结构
+
+**chat_sessions集合**:
+
+```javascript
+{
+  session_id: "uuid",
+  user_id: "string",
+  window_id: "string", 
+  thread_id: "string",
+  created_at: Date,
+  last_activity: Date,
+  context: {},
+  status: "active|archived|deleted"
+}
+```
+
+**chat_messages集合**:
+
+```javascript
+{
+  session_id: "uuid",
+  role: "user|assistant",
+  content: "string",
+  timestamp: Date,
+  metadata: {}
+}
+```
+
+#### 5. 使用示例
+
+```python
+from copilot.agent.multi_session_agent import MultiSessionAgent
+
+agent = MultiSessionAgent()
+
+# 创建会话
+session_id = await agent.create_session("user123", "window1")
+
+# 对话（自动保存到数据库）
+response = await agent.chat(session_id, "你好")
+
+# 会话超时后...
+await agent.delete_session(session_id, archive=True)
+
+# 重新访问时自动恢复
+session = await agent.session_manager.get_session(session_id)
+# 会话从数据库自动恢复到Redis
+
+# 查看完整历史
+history = await agent.get_chat_history(session_id, from_db=True)
+```
+
+#### 6. 优势
+
+1. **数据安全**: 对话永不丢失，支持灾难恢复
+2. **用户体验**: 跨会话的连续对话体验
+3. **功能增强**: 支持历史搜索、数据分析
+4. **性能平衡**: Redis提供高性能，MongoDB提供持久化
+5. **扩展性**: 支持大规模用户和海量对话数据
+
+#### 7. 配置和部署
+
+```bash
+# 初始化数据库索引
+python scripts/init_db_indexes.py
+
+# 运行演示
+python examples/chat_history_demo.py
+```
