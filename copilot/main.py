@@ -10,28 +10,37 @@ from fastapi.responses import JSONResponse
 from copilot.router import chat_router
 from copilot.utils.logger import logger
 from copilot.utils.mongo_client import get_mongo_manager
+from copilot.utils.redis_client import get_redis_manager
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
-    # 启动事件：初始化MongoDB连接池
+    # 启动事件：初始化MongoDB和Redis连接池
     try:
         mongo_manager = await get_mongo_manager()
         logger.info("MongoDB connection pool initialized successfully")
+
+        redis_manager = get_redis_manager()
+        await redis_manager.initialize()
+        logger.info("Redis connection pool initialized successfully")
     except Exception as e:
-        logger.error(f"Failed to initialize MongoDB connection pool: {str(e)}")
+        logger.error(f"Failed to initialize connection pools: {str(e)}")
         raise
 
     yield
 
-    # 关闭事件：清理MongoDB连接
+    # 关闭事件：清理MongoDB和Redis连接
     try:
         mongo_manager = await get_mongo_manager()
         await mongo_manager.close()
         logger.info("MongoDB connections closed")
+
+        redis_manager = get_redis_manager()
+        await redis_manager.close()
+        logger.info("Redis connections closed")
     except Exception as e:
-        logger.warning(f"Error closing MongoDB connections: {str(e)}")
+        logger.warning(f"Error closing connections: {str(e)}")
 
 
 app = FastAPI(lifespan=lifespan)
