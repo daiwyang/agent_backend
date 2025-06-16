@@ -49,51 +49,51 @@ async def chat(request: ChatRequest):
     """发送聊天消息 - HTTP流式响应"""
     import json
     import asyncio
-    
+
     async def generate_response():
         try:
             # 发送开始事件
-            start_data = json.dumps({'type': 'start', 'session_id': request.session_id}) + '\n'
-            yield start_data.encode('utf-8')
-            
+            start_data = json.dumps({"type": "start", "session_id": request.session_id}) + "\n"
+            yield start_data.encode("utf-8")
+
             response_content = ""
             content_buffer = ""  # 用于缓冲小块内容
-            
+
             async for chunk in session_service.chat_stream(request.session_id, request.message):
                 if "error" in chunk:
-                    error_data = json.dumps({'type': 'error', 'content': chunk['error']}) + '\n'
-                    yield error_data.encode('utf-8')
+                    error_data = json.dumps({"type": "error", "content": chunk["error"]}) + "\n"
+                    yield error_data.encode("utf-8")
                     break
                 elif "content" in chunk:
                     response_content += chunk["content"]
                     content_buffer += chunk["content"]
-                    
+
                     # 当缓冲区达到一定大小或遇到标点符号时发送数据
-                    if len(content_buffer) >= 5 or any(char in content_buffer for char in '，。！？；：\n'):
-                        content_data = json.dumps({'type': 'content', 'content': content_buffer}) + '\n'
-                        yield content_data.encode('utf-8')
+                    if len(content_buffer) >= 5 or any(char in content_buffer for char in "，。！？；：\n"):
+                        content_data = json.dumps({"type": "content", "content": content_buffer}) + "\n"
+                        yield content_data.encode("utf-8")
                         content_buffer = ""  # 清空缓冲区
-                        
+
                         # 确保数据立即发送
                         await asyncio.sleep(0)
-            
+
             # 发送剩余的缓冲内容
             if content_buffer:
-                content_data = json.dumps({'type': 'content', 'content': content_buffer}) + '\n'
-                yield content_data.encode('utf-8')
-            
+                content_data = json.dumps({"type": "content", "content": content_buffer}) + "\n"
+                yield content_data.encode("utf-8")
+
             # 消息保存已在session_service中处理
-            
+
             # 发送结束事件
-            end_data = json.dumps({'type': 'end', 'session_id': request.session_id}) + '\n'
-            yield end_data.encode('utf-8')
-            
+            end_data = json.dumps({"type": "end", "session_id": request.session_id}) + "\n"
+            yield end_data.encode("utf-8")
+
         except ValueError as e:
-            error_data = json.dumps({'type': 'error', 'content': str(e)}) + '\n'
-            yield error_data.encode('utf-8')
+            error_data = json.dumps({"type": "error", "content": str(e)}) + "\n"
+            yield error_data.encode("utf-8")
         except Exception as e:
-            error_data = json.dumps({'type': 'error', 'content': '处理请求时出现错误'}) + '\n'
-            yield error_data.encode('utf-8')
+            error_data = json.dumps({"type": "error", "content": "处理请求时出现错误"}) + "\n"
+            yield error_data.encode("utf-8")
 
     return StreamingResponse(
         generate_response(),
@@ -103,8 +103,8 @@ async def chat(request: ChatRequest):
             "Connection": "keep-alive",
             "Transfer-Encoding": "chunked",
             "X-Accel-Buffering": "no",  # 禁用Nginx缓冲
-            "Content-Encoding": "identity"  # 禁用压缩
-        }
+            "Content-Encoding": "identity",  # 禁用压缩
+        },
     )
 
 

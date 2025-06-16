@@ -14,6 +14,7 @@ from copilot.utils.logger import logger
 @dataclass
 class ChatMessage:
     """聊天消息"""
+
     role: str  # "user" 或 "assistant"
     content: str
     timestamp: str = None
@@ -22,6 +23,7 @@ class ChatMessage:
 @dataclass
 class ChatResponse:
     """聊天响应"""
+
     session_id: str
     messages: List[ChatMessage]
     context: Dict[str, Any]
@@ -39,6 +41,7 @@ class SessionService:
         """延迟初始化聊天历史管理器"""
         if self._chat_history_manager is None:
             from copilot.agent.chat_history_manager import chat_history_manager
+
             self._chat_history_manager = chat_history_manager
         return self._chat_history_manager
 
@@ -49,11 +52,11 @@ class SessionService:
     async def chat(self, session_id: str, message: str) -> ChatResponse:
         """
         发送消息并获取回复
-        
+
         Args:
             session_id: 会话ID
             message: 用户消息
-            
+
         Returns:
             ChatResponse: 聊天响应
         """
@@ -63,28 +66,24 @@ class SessionService:
 
         # 使用核心Agent进行聊天
         response_content = await self.core_agent.chat(session_info.thread_id, message)
-        
+
         # 保存消息到数据库
         await self._save_messages(session_id, message, response_content)
-        
+
         # 更新会话活动时间
         await session_manager.get_session(session_id)
 
         response_message = ChatMessage(role="assistant", content=response_content)
-        return ChatResponse(
-            session_id=session_id,
-            messages=[response_message],
-            context=session_info.context
-        )
+        return ChatResponse(session_id=session_id, messages=[response_message], context=session_info.context)
 
     async def chat_stream(self, session_id: str, message: str) -> AsyncGenerator[Dict[str, Any], None]:
         """
         流式聊天
-        
+
         Args:
             session_id: 会话ID
             message: 用户消息
-            
+
         Yields:
             Dict: 响应片段
         """
@@ -95,7 +94,7 @@ class SessionService:
 
         try:
             full_response = ""
-            
+
             # 使用核心Agent进行流式聊天
             async for content in self.core_agent.chat_stream(session_info.thread_id, message):
                 if content:
@@ -105,10 +104,10 @@ class SessionService:
             # 保存完整对话到数据库
             if full_response:
                 await self._save_messages(session_id, message, full_response)
-            
+
             # 更新会话活动时间
             await session_manager.get_session(session_id)
-            
+
         except Exception as e:
             logger.error(f"Error in chat_stream for session {session_id}: {str(e)}")
             yield {"error": "处理请求时出现错误"}
@@ -117,19 +116,11 @@ class SessionService:
         """保存消息到数据库"""
         try:
             timestamp = asyncio.get_event_loop().time()
-            
+
+            await self.chat_history_manager.save_message(session_id=session_id, role="user", content=user_message, metadata={"timestamp": timestamp})
+
             await self.chat_history_manager.save_message(
-                session_id=session_id,
-                role="user",
-                content=user_message,
-                metadata={"timestamp": timestamp}
-            )
-            
-            await self.chat_history_manager.save_message(
-                session_id=session_id,
-                role="assistant",
-                content=assistant_message,
-                metadata={"timestamp": timestamp}
+                session_id=session_id, role="assistant", content=assistant_message, metadata={"timestamp": timestamp}
             )
         except Exception as e:
             logger.warning(f"Failed to save messages to database: {str(e)}")
@@ -154,11 +145,7 @@ class SessionService:
             try:
                 db_messages = await self.chat_history_manager.get_session_messages(session_id)
                 return [
-                    ChatMessage(
-                        role=msg.role,
-                        content=msg.content,
-                        timestamp=msg.timestamp.isoformat() if msg.timestamp else None
-                    )
+                    ChatMessage(role=msg.role, content=msg.content, timestamp=msg.timestamp.isoformat() if msg.timestamp else None)
                     for msg in db_messages
                 ]
             except Exception as e:
@@ -177,11 +164,10 @@ class SessionService:
 
                 return [
                     ChatMessage(
-                        role=msg.type if hasattr(msg, "type") else "unknown",
-                        content=str(msg.content) if hasattr(msg, "content") else str(msg)
+                        role=msg.type if hasattr(msg, "type") else "unknown", content=str(msg.content) if hasattr(msg, "content") else str(msg)
                     )
                     for msg in messages
                 ]
             except Exception as e:
                 logger.error(f"Error getting chat history from memory: {str(e)}")
-                return [] 
+                return []

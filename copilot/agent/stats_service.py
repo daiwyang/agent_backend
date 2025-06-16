@@ -17,6 +17,7 @@ class StatsService:
         """延迟初始化聊天历史管理器"""
         if self._chat_history_manager is None:
             from copilot.agent.chat_history_manager import chat_history_manager
+
             self._chat_history_manager = chat_history_manager
         return self._chat_history_manager
 
@@ -42,9 +43,4 @@ class StatsService:
             return await self.chat_history_manager.get_chat_stats(user_id)
         except Exception as e:
             logger.error(f"Error getting chat stats: {str(e)}")
-            return {
-                "total_messages": 0,
-                "total_sessions": 0,
-                "total_users": 0 if user_id else 0,
-                "error": str(e)
-            } 
+            return {"total_messages": 0, "total_sessions": 0, "total_users": 0 if user_id else 0, "error": str(e)}

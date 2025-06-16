@@ -35,12 +35,13 @@ class SessionManager:
         self.user_sessions_prefix = "user_sessions:"
         # 延迟导入避免循环依赖
         self._chat_history_manager = None
-    
+
     @property
     def chat_history_manager(self):
         """延迟初始化聊天历史管理器"""
         if self._chat_history_manager is None:
             from copilot.agent.chat_history_manager import chat_history_manager
+
             self._chat_history_manager = chat_history_manager
         return self._chat_history_manager
 
@@ -76,15 +77,11 @@ class SessionManager:
             user_sessions_key = f"{self.user_sessions_prefix}{user_id}"
             await redis.sadd(user_sessions_key, session_id)
             await redis.expire(user_sessions_key, self.session_timeout)
-        
+
         # 同时保存到数据库进行持久化
         try:
             await self.chat_history_manager.save_session(
-                session_id=session_id,
-                user_id=user_id,
-                window_id=window_id,
-                thread_id=thread_id,
-                context=session_info.context
+                session_id=session_id, user_id=user_id, window_id=window_id, thread_id=thread_id, context=session_info.context
             )
         except Exception as e:
             logger.warning(f"Failed to save session {session_id} to database: {str(e)}")
@@ -119,30 +116,27 @@ class SessionManager:
             await redis.set(session_key, updated_data, ex=self.session_timeout)
 
             return session_info
-    
+
     async def _restore_session_from_db(self, session_id: str) -> Optional[SessionInfo]:
         """
         从数据库恢复会话到Redis
-        
+
         Args:
             session_id: 会话ID
-            
+
         Returns:
             SessionInfo or None
         """
         try:
             # 从数据库查找会话信息
             from copilot.utils.mongo_client import MongoClient
-            
+
             async with MongoClient() as mongo:
-                session_doc = await mongo.find_one(
-                    "chat_sessions",
-                    {"session_id": session_id, "status": {"$in": ["active", "archived"]}}
-                )
-                
+                session_doc = await mongo.find_one("chat_sessions", {"session_id": session_id, "status": {"$in": ["active", "archived"]}})
+
                 if not session_doc:
                     return None
-                
+
                 # 重新构建SessionInfo
                 session_info = SessionInfo(
                     session_id=session_doc["session_id"],
@@ -151,23 +145,23 @@ class SessionManager:
                     created_at=session_doc["created_at"],
                     last_activity=datetime.now(),  # 更新为当前时间
                     context=session_doc.get("context", {}),
-                    thread_id=session_doc["thread_id"]
+                    thread_id=session_doc["thread_id"],
                 )
-                
+
                 # 重新保存到Redis
                 async with RedisClient() as redis:
                     session_key = f"{self.redis_prefix}{session_id}"
                     session_data = self._serialize_session(session_info)
                     await redis.set(session_key, session_data, ex=self.session_timeout)
-                    
+
                     # 重新添加到用户会话列表
                     user_sessions_key = f"{self.user_sessions_prefix}{session_info.user_id}"
                     await redis.sadd(user_sessions_key, session_id)
                     await redis.expire(user_sessions_key, self.session_timeout)
-                
+
                 logger.info(f"Successfully restored session {session_id} from database")
                 return session_info
-                
+
         except Exception as e:
             logger.error(f"Failed to restore session {session_id} from database: {str(e)}")
             return None
@@ -237,7 +231,7 @@ class SessionManager:
             # 从用户会话列表中移除
             user_sessions_key = f"{self.user_sessions_prefix}{session_info.user_id}"
             await redis.srem(user_sessions_key, session_id)
-        
+
         # 归档到数据库
         if archive:
             try:
