@@ -3,6 +3,10 @@ from pathlib import Path
 
 import yaml
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 # 设置当前文件父目录的路径
 path = Path(__file__).parent.parent
 # 设置当前工作目录为脚本所在目录

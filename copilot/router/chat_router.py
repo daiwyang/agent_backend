@@ -8,8 +8,9 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-# 导入实际的会话管理器和Agent
-from copilot.agent.multi_session_agent import MultiSessionAgent
+# 导入简化的服务
+from copilot.agent.session_service import SessionService
+from copilot.agent.stats_service import StatsService
 from copilot.agent.session_manager import session_manager
 from copilot.model.chat_model import (
     ChatHistoryResponse,
@@ -23,8 +24,9 @@ from copilot.model.chat_model import (
     SessionInfo,
 )
 
-# 创建全局Agent实例
-agent = MultiSessionAgent()
+# 创建全局服务实例
+session_service = SessionService()
+stats_service = StatsService()
 
 # FastAPI应用
 router = APIRouter(prefix="/chat")
@@ -34,7 +36,7 @@ router = APIRouter(prefix="/chat")
 async def create_session(request: CreateSessionRequest):
     """创建新的聊天会话"""
     try:
-        session_id = await agent.create_session(request.user_id, request.window_id)
+        session_id = await session_service.create_session(request.user_id, request.window_id)
         session = await session_manager.get_session(session_id)
 
         return CreateSessionResponse(session_id=session_id, user_id=session.user_id, window_id=session.window_id, thread_id=session.thread_id)
@@ -50,39 +52,37 @@ async def chat(request: ChatRequest):
     
     async def generate_response():
         try:
-            # 保存用户消息
-            await agent.chat_history_manager.save_message(
-                session_id=request.session_id,
-                role="user", 
-                content=request.message,
-                metadata={"timestamp": datetime.now().isoformat()}
-            )
-            
-            # 发送开始事件并立即刷新
+            # 发送开始事件
             start_data = json.dumps({'type': 'start', 'session_id': request.session_id}) + '\n'
             yield start_data.encode('utf-8')
-            await asyncio.sleep(0.01)  # 小延迟确保数据被发送
             
             response_content = ""
-            async for chunk in agent.chat_stream(request.session_id, request.message):
+            content_buffer = ""  # 用于缓冲小块内容
+            
+            async for chunk in session_service.chat_stream(request.session_id, request.message):
                 if "error" in chunk:
                     error_data = json.dumps({'type': 'error', 'content': chunk['error']}) + '\n'
                     yield error_data.encode('utf-8')
                     break
                 elif "content" in chunk:
                     response_content += chunk["content"]
-                    content_data = json.dumps({'type': 'content', 'content': chunk['content']}) + '\n'
-                    yield content_data.encode('utf-8')
-                    await asyncio.sleep(0.01)  # 小延迟确保流式输出
+                    content_buffer += chunk["content"]
+                    
+                    # 当缓冲区达到一定大小或遇到标点符号时发送数据
+                    if len(content_buffer) >= 5 or any(char in content_buffer for char in '，。！？；：\n'):
+                        content_data = json.dumps({'type': 'content', 'content': content_buffer}) + '\n'
+                        yield content_data.encode('utf-8')
+                        content_buffer = ""  # 清空缓冲区
+                        
+                        # 确保数据立即发送
+                        await asyncio.sleep(0)
             
-            # 保存完整的助手响应
-            if response_content:
-                await agent.chat_history_manager.save_message(
-                    session_id=request.session_id,
-                    role="assistant",
-                    content=response_content, 
-                    metadata={"timestamp": datetime.now().isoformat()}
-                )
+            # 发送剩余的缓冲内容
+            if content_buffer:
+                content_data = json.dumps({'type': 'content', 'content': content_buffer}) + '\n'
+                yield content_data.encode('utf-8')
+            
+            # 消息保存已在session_service中处理
             
             # 发送结束事件
             end_data = json.dumps({'type': 'end', 'session_id': request.session_id}) + '\n'
@@ -99,7 +99,7 @@ async def chat(request: ChatRequest):
         generate_response(),
         media_type="application/x-ndjson",
         headers={
-            "Cache-Control": "no-cache",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
             "Connection": "keep-alive",
             "Transfer-Encoding": "chunked",
             "X-Accel-Buffering": "no",  # 禁用Nginx缓冲
@@ -112,7 +112,7 @@ async def chat(request: ChatRequest):
 async def chat_non_stream(request: ChatRequest):
     """发送聊天消息 - 非流式响应（向后兼容）"""
     try:
-        response = await agent.chat(request.session_id, request.message)
+        response = await session_service.chat(request.session_id, request.message)
 
         # 取第一个响应消息
         response_text = response.messages[0].content if response.messages else "无响应"
@@ -133,7 +133,7 @@ async def get_chat_history(
 ):
     """获取会话的聊天历史"""
     try:
-        messages = await agent.get_chat_history(session_id, from_db=from_db)
+        messages = await session_service.get_chat_history(session_id, from_db=from_db)
 
         # 应用分页
         total_count = len(messages)
@@ -152,7 +152,7 @@ async def get_chat_history(
 async def get_user_sessions(user_id: str):
     """获取用户的所有活跃会话"""
     try:
-        sessions = await agent.get_user_sessions(user_id)
+        sessions = await session_service.get_user_sessions(user_id)
         return [
             SessionInfo(
                 session_id=session.session_id,
@@ -171,7 +171,7 @@ async def get_user_sessions(user_id: str):
 async def get_user_chat_history(user_id: str):
     """获取用户的所有聊天历史"""
     try:
-        history = await agent.get_user_chat_history(user_id)
+        history = await stats_service.get_user_chat_history(user_id)
         return {"user_id": user_id, "sessions": history}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -181,7 +181,7 @@ async def get_user_chat_history(user_id: str):
 async def search_chat_history(request: SearchRequest):
     """搜索用户的聊天历史"""
     try:
-        results = await agent.search_chat_history(request.user_id, request.query, request.limit)
+        results = await stats_service.search_chat_history(request.user_id, request.query, request.limit)
 
         return {
             "user_id": request.user_id,
@@ -200,7 +200,7 @@ async def search_chat_history(request: SearchRequest):
 async def get_chat_stats(user_id: Optional[str] = Query(None, description="用户ID（可选）")):
     """获取聊天统计信息"""
     try:
-        stats = await agent.get_chat_stats(user_id)
+        stats = await stats_service.get_chat_stats(user_id)
         return stats
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -210,7 +210,7 @@ async def get_chat_stats(user_id: Optional[str] = Query(None, description="用�
 async def delete_session(session_id: str, archive: bool = Query(True, description="是否归档到数据库")):
     """删除会话"""
     try:
-        await agent.delete_session(session_id)
+        await session_service.delete_session(session_id)
         return {"message": f"Session deleted successfully (archived: {archive})"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
