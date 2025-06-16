@@ -15,6 +15,10 @@ from copilot.model.user_model import UserRegisterRequest, UserResponse
 from copilot.utils.mongo_client import get_mongo_manager
 from copilot.service.user_session_service import get_user_session_service
 from copilot.utils.logger import logger
+from copilot.utils.error_codes import (
+    ErrorCodes, ErrorHandler, 
+    raise_auth_error, raise_user_error, raise_system_error
+)
 
 
 class UserService:
@@ -104,7 +108,7 @@ class UserService:
             return user
         except Exception as e:
             logger.error(f"Failed to get user by username {username}: {str(e)}")
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"查询用户失败: {str(e)}")
+            raise ErrorHandler.handle_database_error(e, "用户查询")
 
     async def get_user_by_email(self, email: str) -> Optional[dict]:
         """根据邮箱获取用户"""
@@ -122,7 +126,7 @@ class UserService:
             return user
         except Exception as e:
             logger.error(f"Failed to get user by email {email}: {str(e)}")
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"查询用户失败: {str(e)}")
+            raise ErrorHandler.handle_database_error(e, "用户邮箱查询")
 
     async def register_user(self, user_data: UserRegisterRequest) -> UserResponse:
         """用户注册"""
@@ -132,13 +136,13 @@ class UserService:
         existing_user = await self.get_user_by_username(user_data.username)
         if existing_user:
             logger.warning(f"Registration failed: username already exists: {user_data.username}")
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="用户名已存在")
+            raise_user_error(ErrorCodes.USERNAME_EXISTS)
 
         # 检查邮箱是否已存在
         existing_email = await self.get_user_by_email(user_data.email)
         if existing_email:
             logger.warning(f"Registration failed: email already exists: {user_data.email}")
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="邮箱已被注册")
+            raise_user_error(ErrorCodes.EMAIL_EXISTS)
 
         # 创建新用户
         user_id = str(uuid.uuid4())
@@ -172,7 +176,7 @@ class UserService:
             )
         except Exception as e:
             logger.error(f"User registration failed for {user_data.username}: {str(e)}")
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"创建用户失败: {str(e)}")
+            raise ErrorHandler.handle_database_error(e, "用户创建")
 
     async def authenticate_user(self, username: str, password: str) -> Optional[dict]:
         """用户认证"""
@@ -212,10 +216,7 @@ class UserService:
         # 检查用户是否被禁用
         if not user.get("is_active", True):
             logger.warning(f"Login failed: user account disabled: {username}")
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="用户账户已被禁用"
-            )
+            raise_auth_error(ErrorCodes.ACCOUNT_DISABLED)
         
         try:
             # 创建JWT token
@@ -251,10 +252,7 @@ class UserService:
             
         except Exception as e:
             logger.error(f"Login failed for user {username}: {str(e)}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="登录过程中发生错误"
-            )
+            raise ErrorHandler.handle_system_error(e, "用户登录")
     
     async def logout_user(self, token: str) -> bool:
         """
@@ -352,4 +350,4 @@ class UserService:
             )
         except Exception as e:
             logger.error(f"Failed to get user info for user_id {user_id}: {str(e)}")
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"获取用户信息失败: {str(e)}")
+            raise ErrorHandler.handle_database_error(e, "用户信息获取")

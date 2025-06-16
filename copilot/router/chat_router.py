@@ -25,6 +25,10 @@ from copilot.model.chat_model import (
 from copilot.service.chat_service import ChatService
 from copilot.service.stats_service import StatsService
 from copilot.utils.auth import get_current_user_from_state
+from copilot.utils.error_codes import (
+    ErrorCodes, ErrorHandler, 
+    raise_chat_error, raise_validation_error, raise_system_error
+)
 
 # 创建全局服务实例
 chat_service = ChatService()
@@ -41,14 +45,16 @@ async def create_session(request: CreateSessionRequestWithAuth, current_user: di
         # 从认证依赖获取当前用户ID
         user_id = current_user.get("user_id")
         if not user_id:
-            raise HTTPException(status_code=400, detail="用户ID缺失")
+            raise_validation_error("用户ID缺失")
 
         session_id = await chat_service.create_session(user_id, request.window_id)
         session = await session_manager.get_session(session_id)
 
         return CreateSessionResponse(session_id=session_id, user_id=session.user_id, window_id=session.window_id, thread_id=session.thread_id)
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise ErrorHandler.handle_system_error(e, "创建聊天会话")
 
 
 @router.post("/chat")
@@ -145,9 +151,9 @@ async def chat_non_stream(request: ChatRequest):
 
         return ChatResponse(session_id=request.session_id, response=response_text, timestamp=datetime.now())
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise_chat_error(ErrorCodes.CHAT_SESSION_NOT_FOUND, str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise ErrorHandler.handle_system_error(e, "聊天消息处理")
 
 
 @router.get("/sessions/{session_id}/history", response_model=ChatHistoryResponse)
@@ -171,7 +177,7 @@ async def get_chat_history(
             total_count=total_count,
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise ErrorHandler.handle_system_error(e, "获取聊天历史")
 
 
 @router.get("/sessions", response_model=List[SessionInfo])
@@ -181,7 +187,7 @@ async def get_user_sessions(current_user: dict = Depends(get_current_user_from_s
         # 从认证依赖获取当前用户ID
         user_id = current_user.get("user_id")
         if not user_id:
-            raise HTTPException(status_code=400, detail="用户ID缺失")
+            raise_validation_error("用户ID缺失")
 
         sessions = await chat_service.get_user_sessions(user_id)
         return [
@@ -194,8 +200,10 @@ async def get_user_sessions(current_user: dict = Depends(get_current_user_from_s
             )
             for session in sessions
         ]
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise ErrorHandler.handle_system_error(e, "获取用户会话列表")
 
 
 @router.get("/chat-history")
@@ -205,12 +213,14 @@ async def get_user_chat_history(current_user: dict = Depends(get_current_user_fr
         # 从认证依赖获取当前用户ID
         user_id = current_user.get("user_id")
         if not user_id:
-            raise HTTPException(status_code=400, detail="用户ID缺失")
+            raise_validation_error("用户ID缺失")
 
         history = await stats_service.get_user_chat_history(user_id)
         return {"user_id": user_id, "sessions": history}
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise ErrorHandler.handle_system_error(e, "获取用户聊天历史")
 
 
 @router.post("/search")
@@ -220,7 +230,7 @@ async def search_chat_history(request: SearchRequest, current_user: dict = Depen
         # 从认证依赖获取当前用户ID
         user_id = current_user.get("user_id")
         if not user_id:
-            raise HTTPException(status_code=400, detail="用户ID缺失")
+            raise_validation_error("用户ID缺失")
 
         results = await stats_service.search_chat_history(user_id, request.query, request.limit)
 
@@ -233,8 +243,10 @@ async def search_chat_history(request: SearchRequest, current_user: dict = Depen
             ],
             "total_count": len(results),
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise ErrorHandler.handle_system_error(e, "搜索聊天历史")
 
 
 @router.get("/stats")
@@ -244,12 +256,14 @@ async def get_chat_stats(current_user: dict = Depends(get_current_user_from_stat
         # 从认证依赖获取当前用户ID
         user_id = current_user.get("user_id")
         if not user_id:
-            raise HTTPException(status_code=400, detail="用户ID缺失")
+            raise_validation_error("用户ID缺失")
 
         stats = await stats_service.get_chat_stats(user_id)
         return stats
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise ErrorHandler.handle_system_error(e, "获取聊天统计信息")
 
 
 @router.delete("/sessions/{session_id}")
@@ -259,7 +273,7 @@ async def delete_session(session_id: str, archive: bool = Query(True, descriptio
         await chat_service.delete_session(session_id)
         return {"message": f"Session deleted successfully (archived: {archive})"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise ErrorHandler.handle_system_error(e, "删除会话")
 
 
 @router.get("/health")

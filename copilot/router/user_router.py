@@ -11,6 +11,7 @@ from copilot.model.user_model import BaseResponse, UserLoginRequest, UserLoginRe
 from copilot.service.user_service import UserService
 from copilot.utils.auth import get_current_active_user
 from copilot.utils.logger import logger
+from copilot.utils.error_codes import ErrorCodes, ErrorHandler, raise_auth_error, raise_user_error
 
 # 创建路由器
 router = APIRouter(prefix="/user", tags=["用户管理"])
@@ -45,7 +46,7 @@ async def register(user_data: UserRegisterRequest):
     except HTTPException as e:
         raise e
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"注册失败: {str(e)}")
+        raise ErrorHandler.handle_system_error(e, "用户注册")
 
 
 @router.post("/login", response_model=UserLoginResponse, summary="用户登录")
@@ -60,11 +61,7 @@ async def login(login_data: UserLoginRequest):
     """
     login_result = await user_service.login_user(login_data.username, login_data.password)
     if not login_result:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="用户名或密码错误",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise_auth_error(ErrorCodes.AUTHENTICATION_FAILED)
 
     # 构建用户响应
     user_info = login_result["user"]
