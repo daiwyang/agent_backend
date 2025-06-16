@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Union
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection, AsyncIOMotorDatabase
 from pymongo.errors import PyMongoError
 
-from copilot.utils.config import conf
+from copilot.config.settings import conf
 from copilot.utils.logger import logger
 
 

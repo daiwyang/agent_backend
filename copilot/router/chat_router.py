@@ -8,10 +8,7 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-# 导入简化的服务
-from copilot.agent.session_service import SessionService
-from copilot.agent.stats_service import StatsService
-from copilot.agent.session_manager import session_manager
+from copilot.core.session_manager import session_manager
 from copilot.model.chat_model import (
     ChatHistoryResponse,
     ChatMessage,
@@ -24,8 +21,12 @@ from copilot.model.chat_model import (
     SessionInfo,
 )
 
+# 导入简化的服务
+from copilot.service.chat_service import ChatService
+from copilot.service.stats_service import StatsService
+
 # 创建全局服务实例
-session_service = SessionService()
+chat_service = ChatService()
 stats_service = StatsService()
 
 # FastAPI应用
@@ -36,7 +37,7 @@ router = APIRouter(prefix="/chat")
 async def create_session(request: CreateSessionRequest):
     """创建新的聊天会话"""
     try:
-        session_id = await session_service.create_session(request.user_id, request.window_id)
+        session_id = await chat_service.create_session(request.user_id, request.window_id)
         session = await session_manager.get_session(session_id)
 
         return CreateSessionResponse(session_id=session_id, user_id=session.user_id, window_id=session.window_id, thread_id=session.thread_id)
@@ -47,8 +48,8 @@ async def create_session(request: CreateSessionRequest):
 @router.post("/chat")
 async def chat(request: ChatRequest):
     """发送聊天消息 - HTTP流式响应"""
-    import json
     import asyncio
+    import json
 
     async def generate_response():
         try:
@@ -59,7 +60,7 @@ async def chat(request: ChatRequest):
             response_content = ""
             content_buffer = ""  # 用于缓冲小块内容
 
-            async for chunk in session_service.chat_stream(request.session_id, request.message):
+            async for chunk in chat_service.chat_stream(request.session_id, request.message):
                 if "error" in chunk:
                     error_data = json.dumps({"type": "error", "content": chunk["error"]}) + "\n"
                     yield error_data.encode("utf-8")
@@ -112,7 +113,7 @@ async def chat(request: ChatRequest):
 async def chat_non_stream(request: ChatRequest):
     """发送聊天消息 - 非流式响应（向后兼容）"""
     try:
-        response = await session_service.chat(request.session_id, request.message)
+        response = await chat_service.chat(request.session_id, request.message)
 
         # 取第一个响应消息
         response_text = response.messages[0].content if response.messages else "无响应"
@@ -133,7 +134,7 @@ async def get_chat_history(
 ):
     """获取会话的聊天历史"""
     try:
-        messages = await session_service.get_chat_history(session_id, from_db=from_db)
+        messages = await chat_service.get_chat_history(session_id, from_db=from_db)
 
         # 应用分页
         total_count = len(messages)
@@ -152,7 +153,7 @@ async def get_chat_history(
 async def get_user_sessions(user_id: str):
     """获取用户的所有活跃会话"""
     try:
-        sessions = await session_service.get_user_sessions(user_id)
+        sessions = await chat_service.get_user_sessions(user_id)
         return [
             SessionInfo(
                 session_id=session.session_id,
@@ -210,7 +211,7 @@ async def get_chat_stats(user_id: Optional[str] = Query(None, description="用�
 async def delete_session(session_id: str, archive: bool = Query(True, description="是否归档到数据库")):
     """删除会话"""
     try:
-        await session_service.delete_session(session_id)
+        await chat_service.delete_session(session_id)
         return {"message": f"Session deleted successfully (archived: {archive})"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

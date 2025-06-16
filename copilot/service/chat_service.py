@@ -6,8 +6,8 @@ import asyncio
 from typing import List, Dict, Any, AsyncGenerator
 from dataclasses import dataclass
 
-from copilot.agent.core_agent import CoreAgent
-from copilot.agent.session_manager import session_manager, SessionInfo
+from copilot.core.agent import CoreAgent
+from copilot.core.session_manager import session_manager, SessionInfo
 from copilot.utils.logger import logger
 
 
@@ -29,7 +29,7 @@ class ChatResponse:
     context: Dict[str, Any]
 
 
-class SessionService:
+class ChatService:
     """会话服务 - 组合CoreAgent和会话管理"""
 
     def __init__(self, model_name: str = "deepseek-chat", tools: List = None):
@@ -40,7 +40,7 @@ class SessionService:
     def chat_history_manager(self):
         """延迟初始化聊天历史管理器"""
         if self._chat_history_manager is None:
-            from copilot.agent.chat_history_manager import chat_history_manager
+            from copilot.service.history_service import chat_history_manager
 
             self._chat_history_manager = chat_history_manager
         return self._chat_history_manager

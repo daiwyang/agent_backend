@@ -3,13 +3,12 @@
 负责对话历史的持久化存储和检索
 """
 
-import json
+from dataclasses import dataclass
 from datetime import datetime
-from typing import List, Dict, Any, Optional
-from dataclasses import dataclass, asdict
+from typing import Any, Dict, List
 
-from copilot.utils.mongo_client import get_mongo_manager
 from copilot.utils.logger import logger
+from copilot.utils.mongo_client import get_mongo_manager
 
 
 @dataclass

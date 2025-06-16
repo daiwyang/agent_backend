@@ -3,7 +3,7 @@ from typing import Any, Optional, Union
 from redis.asyncio import ConnectionPool, Redis
 from redis.exceptions import RedisError
 
-from copilot.utils.config import conf
+from copilot.config.settings import conf
 from copilot.utils.logger import logger
 
 

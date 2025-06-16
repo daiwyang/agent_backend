@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from copilot.router import chat_router
+from copilot.router import chat_router, user_router
 from copilot.utils.logger import logger
 from copilot.utils.mongo_client import get_mongo_manager
 from copilot.utils.redis_client import get_redis_manager
@@ -46,6 +46,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 app.include_router(chat_router.router, prefix="/agent_backend", tags=["agent_backend"])
+app.include_router(user_router.router, prefix="/agent_backend", tags=["用户管理"])
 
 # 添加CORS中间件
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -87,11 +88,11 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run(
-        app, 
-        host="0.0.0.0", 
+        app,
+        host="0.0.0.0",
         port=8000,
         # 禁用访问日志减少缓冲
         access_log=False,
         # 确保没有响应缓冲
-        timeout_keep_alive=30
+        timeout_keep_alive=30,
     )

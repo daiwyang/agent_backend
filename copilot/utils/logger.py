@@ -5,7 +5,7 @@ from logging.handlers import TimedRotatingFileHandler
 
 import colorlog
 
-from copilot.utils.config import conf
+from copilot.config.settings import conf
 
 
 class DefaultClientIPFilter(logging.Filter):
