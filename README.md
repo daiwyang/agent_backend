@@ -13,7 +13,7 @@
 
 ## 📦 项目结构
 
-```
+```txt
 agent_backend/
 ├── copilot/                    # 主应用模块
 │   ├── config/                 # 配置文件
@@ -51,6 +51,7 @@ docker-compose up -d
 ```
 
 这将启动以下服务：
+
 - **MongoDB**: localhost:27017 (用户: root, 密码: 123456)
 - **Qdrant**: localhost:6333
 
@@ -139,27 +140,32 @@ python copilot/utils/redis_client.py
 ## 🚀 快速开始
 
 1. **克隆项目**
+
    ```bash
    git clone <repository-url>
    cd agent_backend
    ```
 
 2. **安装依赖**
+
    ```bash
    pip install -r requirements.txt
    ```
 
 3. **启动服务**
+
    ```bash
    docker-compose -f docker/docker-compose.yml up -d
    ```
 
 4. **运行应用**
+
    ```bash
    python run.py
    ```
 
 5. **测试连接**
+
    ```bash
    python copilot/examples/mongo_example.py
    ```

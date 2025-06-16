@@ -33,6 +33,7 @@ class UserLoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserResponse
+    session_id: Optional[str] = None
 
 
 class UserUpdateRequest(BaseModel):

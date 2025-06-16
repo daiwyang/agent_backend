@@ -50,7 +50,6 @@ class ChatHistoryResponse(BaseModel):
 
 
 class SearchRequest(BaseModel):
-    user_id: str
     query: str
     limit: Optional[int] = 20
 
@@ -60,3 +59,7 @@ class SearchResult(BaseModel):
     role: str
     content: str
     timestamp: datetime
+
+
+class CreateSessionRequestWithAuth(BaseModel):
+    window_id: Optional[str] = None

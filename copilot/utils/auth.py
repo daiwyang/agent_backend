@@ -5,7 +5,7 @@
 
 from typing import Optional
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from copilot.service.user_service import UserService
@@ -27,7 +27,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     )
     
     try:
-        # 验证token
+        # 验证token（现在包含Redis会话检查）
         username = await user_service.verify_token(credentials.credentials)
         if username is None:
             raise credentials_exception
@@ -38,6 +38,8 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             raise credentials_exception
             
         return user
+    except HTTPException:
+        raise
     except Exception:
         raise credentials_exception
 
@@ -54,4 +56,15 @@ async def get_current_active_user(current_user: dict = Depends(get_current_user)
 
 def create_token_data(username: str) -> TokenData:
     """创建token数据"""
-    return TokenData(username=username) 
+    return TokenData(username=username)
+
+
+async def get_current_user_from_state(request: Request) -> dict:
+    """从请求状态中获取当前用户信息的依赖项"""
+    if not hasattr(request.state, 'current_user'):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="用户未认证",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return request.state.current_user

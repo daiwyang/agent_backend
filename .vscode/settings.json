@@ -1,69 +1,23 @@
 {
-    "github.copilot.enable": {
-        "*": true,
-        "yaml": true,
-        "plaintext": false,
-        "markdown": true
-    },
-    "github.copilot.advanced": {
-        "length": 500,
-        "temperature": 0.1,
-        "top_p": 1,
-        "inlineSuggestEnable": true
-    },
-    "github.copilot.chat.localeOverride": "zh-CN",
-    "github.copilot.chat.welcomeMessage": "never",
-    "github.copilot.chat.useProjectSpecificRules": true,
-    "github.copilot.projectRules": {
-        "description": "Agent Backend 项目规则 - 禁止生成测试文件",
-        "rules": [
-            {
-                "title": "不生成测试文件",
-                "description": "在任何情况下都不要创建、建议或生成测试文件",
-                "pattern": "*",
-                "actions": [
-                    "不要创建以 test_ 开头的 Python 文件",
-                    "不要创建以 _test 结尾的 Python 文件", 
-                    "不要创建 tests/ 目录或其中的任何文件",
-                    "不要创建 test/ 目录或其中的任何文件",
-                    "不要创建 conftest.py 文件",
-                    "不要建议编写单元测试或集成测试",
-                    "不要建议使用 pytest、unittest 或其他测试框架",
-                    "专注于业务逻辑代码和功能实现"
-                ]
-            },
-            {
-                "title": "代码风格规范",
-                "description": "遵循项目的代码风格和结构",
-                "pattern": "*.py",
-                "actions": [
-                    "使用 150 字符行长度限制",
-                    "使用 black 代码格式化风格",
-                    "保持与现有代码结构一致",
-                    "优先使用异步编程模式",
-                    "使用类型注解"
-                ]
-            },
-            {
-                "title": "项目结构规范",
-                "description": "保持项目目录结构清晰",
-                "pattern": "*",
-                "actions": [
-                    "新功能代码放在 copilot/ 目录下对应模块",
-                    "工具类放在 copilot/utils/ 目录",
-                    "路由相关代码放在 copilot/router/ 目录",
-                    "模型相关代码放在 copilot/model/ 目录",
-                    "配置文件放在 copilot/config/ 目录"
-                ]
-            }
-        ],
-        "exclude": [
-            "test_*.py",
-            "*_test.py",
-            "tests/**",
-            "test/**",
-            "conftest.py",
-            "**/*test*.py"
-        ]
-    }
+  "github.copilot.enable": {
+    "*": true,
+    "yaml": true,
+    "plaintext": false,
+    "markdown": true
+  },
+  "github.copilot.advanced": {
+    "length": 500,
+    "temperature": 0.1,
+    "top_p": 1,
+    "inlineSuggestEnable": true
+  },
+  "github.copilot.chat.localeOverride": "zh-CN",
+  "python.defaultInterpreterPath": "./.venv/bin/python",
+  "python.terminal.activateEnvironment": true,
+  "python.autoComplete.extraPaths": [
+    "/data/agent_backend"
+  ],
+  "python.analysis.extraPaths": [
+    "/data/agent_backend"
+  ]
 }
