@@ -38,6 +38,47 @@ stats_service = StatsService()
 router = APIRouter(prefix="/chat")
 
 
+@router.get("/providers")
+async def get_providers():
+    """获取可用的LLM提供商信息"""
+    try:
+        return {
+            "current_provider": chat_service.get_provider_info(),
+            "available_providers": chat_service.get_available_providers()
+        }
+    except Exception as e:
+        raise_system_error(f"获取提供商信息失败: {str(e)}")
+
+
+@router.post("/providers/switch")
+async def switch_provider(
+    provider: str,
+    model: Optional[str] = None,
+    current_user: dict = Depends(get_current_user_from_state)
+):
+    """切换LLM提供商"""
+    try:
+        # 验证用户权限（可以根据需要添加管理员检查）
+        user_id = current_user.get("user_id")
+        if not user_id:
+            raise_validation_error("用户ID缺失")
+        
+        success = chat_service.switch_provider(provider, model)
+        if success:
+            return {
+                "success": True,
+                "message": f"成功切换到提供商: {provider}",
+                "provider_info": chat_service.get_provider_info()
+            }
+        else:
+            raise_chat_error(f"切换提供商失败: {provider}")
+    
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
+        raise_system_error(f"切换提供商时发生错误: {str(e)}")
+
+
 @router.post("/sessions", response_model=CreateSessionResponse)
 async def create_session(request: CreateSessionRequestWithAuth, current_user: dict = Depends(get_current_user_from_state)):
     """创建新的聊天会话"""

@@ -30,10 +30,19 @@ class ChatResponse:
 
 
 class ChatService:
-    """会话服务 - 组合CoreAgent和会话管理"""
+    """会话服务 - 组合CoreAgent和会话管理，支持多个LLM提供商"""
 
-    def __init__(self, model_name: str = "deepseek-chat", tools: List = None):
-        self.core_agent = CoreAgent(model_name, tools)
+    def __init__(self, provider: str = None, model_name: str = None, tools: List = None, **llm_kwargs):
+        """
+        初始化ChatService
+        
+        Args:
+            provider: LLM提供商 (deepseek, openai, claude, moonshot, zhipu, qwen, gemini)
+            model_name: 模型名称
+            tools: 工具列表
+            **llm_kwargs: 传递给LLM的额外参数
+        """
+        self.core_agent = CoreAgent(provider=provider, model_name=model_name, tools=tools, **llm_kwargs)
         self._chat_history_manager = None
 
     @property
@@ -48,6 +57,39 @@ class ChatService:
     async def create_session(self, user_id: str, window_id: str = None) -> str:
         """创建新的对话会话"""
         return await session_manager.create_session(user_id, window_id)
+
+    def get_provider_info(self) -> Dict[str, Any]:
+        """
+        获取当前使用的提供商信息
+        
+        Returns:
+            Dict[str, Any]: 提供商信息
+        """
+        return self.core_agent.get_provider_info()
+
+    def switch_provider(self, provider: str, model_name: str = None, **llm_kwargs) -> bool:
+        """
+        切换LLM提供商
+        
+        Args:
+            provider: 新的提供商
+            model_name: 新的模型名称
+            **llm_kwargs: 传递给LLM的额外参数
+            
+        Returns:
+            bool: 是否切换成功
+        """
+        return self.core_agent.switch_provider(provider, model_name, **llm_kwargs)
+
+    def get_available_providers(self) -> Dict[str, Any]:
+        """
+        获取可用的提供商信息
+        
+        Returns:
+            Dict[str, Any]: 可用提供商信息
+        """
+        from copilot.utils.llm_manager import LLMProviderManager
+        return LLMProviderManager.get_provider_recommendations()
 
     async def chat(self, session_id: str, message: str) -> ChatResponse:
         """
