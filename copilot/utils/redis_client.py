@@ -1,4 +1,7 @@
-from typing import Any, Optional, Union
+import asyncio
+from contextlib import asynccontextmanager
+from functools import wraps
+from typing import Any, AsyncGenerator, Callable, Optional, Union
 
 from redis.asyncio import ConnectionPool, Redis
 from redis.exceptions import RedisError
@@ -7,164 +10,226 @@ from copilot.config.settings import conf
 from copilot.utils.logger import logger
 
 
-class RedisClientManager:
-    """Redis客户端管理器 - 单例模式"""
-    _instance: Optional["RedisClientManager"] = None
+def redis_error_handler(func: Callable) -> Callable:
+    """Redis操作异常处理装饰器"""
+
+    @wraps(func)
+    async def wrapper(self, *args, **kwargs):
+        try:
+            return await func(self, *args, **kwargs)
+        except RedisError as e:
+            operation = func.__name__.upper()
+            key_info = args[0] if args else "unknown"
+            logger.error(f"Redis {operation} {key_info} failed: {str(e)}")
+            raise
+
+    return wrapper
+
+
+class RedisClient:
+    """智能Redis客户端 - 单例模式，连接池管理，异常处理"""
+
+    _instance: Optional["RedisClient"] = None
     _client: Optional[Redis] = None
     _pool: Optional[ConnectionPool] = None
+    _initialized: bool = False
+    _lock = asyncio.Lock()
 
-    def __new__(cls) -> "RedisClientManager":
+    def __new__(cls) -> "RedisClient":
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
 
     async def initialize(self) -> None:
-        """初始化Redis连接池和客户端"""
-        if self._client is not None:
+        """线程安全的初始化Redis连接"""
+        if self._initialized:
             return
-        
-        # 从全局配置加载Redis配置
-        redis_config = conf.get("redis", {})
-        host = redis_config.get("host", "localhost")
-        port = redis_config.get("port", 6379)
-        db = redis_config.get("db", 0)
-        password = redis_config.get("password")
-        max_connections = redis_config.get("max_connections", 10)
-        
-        # 创建连接池
-        self._pool = ConnectionPool.from_url(
-            f"redis://{host}:{port}/{db}", 
-            password=password, 
-            max_connections=max_connections, 
-            decode_responses=True
-        )
-        
-        # 创建客户端
-        self._client = Redis(connection_pool=self._pool)
-        logger.info(f"Redis client initialized with {host}:{port}/{db}")
+
+        async with self._lock:
+            if self._initialized:  # 双重检查
+                return
+
+            redis_config = conf.get("redis", {})
+
+            # 构建Redis URL
+            host = redis_config.get("host", "localhost")
+            port = redis_config.get("port", 6379)
+            db = redis_config.get("db", 0)
+            password = redis_config.get("password")
+            max_connections = redis_config.get("max_connections", 20)
+
+            url = f"redis://:{password}@{host}:{port}/{db}" if password else f"redis://{host}:{port}/{db}"
+
+            # 创建连接池
+            self._pool = ConnectionPool.from_url(
+                url, max_connections=max_connections, retry_on_timeout=True, socket_keepalive=True, socket_keepalive_options={}, decode_responses=True
+            )
+
+            # 创建客户端
+            self._client = Redis(connection_pool=self._pool)
+
+            # 测试连接
+            await self._client.ping()
+            self._initialized = True
+
+            logger.info(f"Redis client initialized: {host}:{port}/{db} (pool size: {max_connections})")
 
     async def close(self) -> None:
         """关闭Redis连接"""
-        if self._client:
-            await self._client.aclose()
-            self._client = None
-        if self._pool:
-            await self._pool.aclose()
-            self._pool = None
-        logger.info("Redis client closed")
+        async with self._lock:
+            if self._client:
+                await self._client.aclose()
+                self._client = None
+            if self._pool:
+                await self._pool.aclose()
+                self._pool = None
+            self._initialized = False
+            logger.info("Redis client closed")
 
-    @property
-    def client(self) -> Redis:
-        """获取Redis客户端实例"""
-        if self._client is None:
+    def _ensure_initialized(self) -> Redis:
+        """确保客户端已初始化"""
+        if not self._initialized or self._client is None:
             raise RuntimeError("Redis client not initialized. Call initialize() first.")
         return self._client
 
     async def ping(self) -> bool:
-        """检查Redis连接状态"""
+        """健康检查"""
         try:
-            return await self.client.ping()
-        except RedisError as e:
-            logger.error(f"Redis PING failed: {str(e)}")
+            client = self._ensure_initialized()
+            return await client.ping()
+        except Exception as e:
+            logger.error(f"Redis health check failed: {str(e)}")
             return False
 
+    # === 基础操作 ===
+    @redis_error_handler
+    async def get(self, key: str) -> Optional[str]:
+        """获取键值"""
+        client = self._ensure_initialized()
+        return await client.get(key)
 
-# 全局Redis管理器实例
-redis_manager = RedisClientManager()
+    @redis_error_handler
+    async def set(self, key: str, value: Union[str, bytes], ex: Optional[int] = None, nx: bool = False) -> bool:
+        """设置键值，支持过期时间和NX选项"""
+        client = self._ensure_initialized()
+        return await client.set(key, value, ex=ex, nx=nx)
 
+    @redis_error_handler
+    async def delete(self, *keys: str) -> int:
+        """删除键"""
+        client = self._ensure_initialized()
+        return await client.delete(*keys)
 
-class RedisClient:
-    """异步Redis客户端封装类 - 使用单例管理器"""
+    @redis_error_handler
+    async def exists(self, *keys: str) -> int:
+        """检查键是否存在"""
+        client = self._ensure_initialized()
+        return await client.exists(*keys)
 
-    def __init__(self):
-        pass
+    @redis_error_handler
+    async def expire(self, key: str, seconds: int) -> bool:
+        """设置过期时间"""
+        client = self._ensure_initialized()
+        return await client.expire(key, seconds)
 
+    @redis_error_handler
+    async def ttl(self, key: str) -> int:
+        """获取键的过期时间"""
+        client = self._ensure_initialized()
+        return await client.ttl(key)
+
+    # === 集合操作 ===
+    @redis_error_handler
+    async def sadd(self, key: str, *values: str) -> int:
+        """向集合添加元素"""
+        client = self._ensure_initialized()
+        return await client.sadd(key, *values)
+
+    @redis_error_handler
+    async def smembers(self, key: str) -> set:
+        """获取集合所有元素"""
+        client = self._ensure_initialized()
+        return await client.smembers(key)
+
+    @redis_error_handler
+    async def srem(self, key: str, *values: str) -> int:
+        """从集合删除元素"""
+        client = self._ensure_initialized()
+        return await client.srem(key, *values)
+
+    @redis_error_handler
+    async def sismember(self, key: str, value: str) -> bool:
+        """检查元素是否在集合中"""
+        client = self._ensure_initialized()
+        return await client.sismember(key, value)
+
+    # === 高级操作 ===
+    @redis_error_handler
+    async def keys(self, pattern: str = "*") -> list:
+        """获取匹配模式的键（生产环境慎用）"""
+        client = self._ensure_initialized()
+        return await client.keys(pattern)
+
+    @redis_error_handler
+    async def scan(self, cursor: int = 0, match: Optional[str] = None, count: int = 100):
+        """安全的键扫描方法"""
+        client = self._ensure_initialized()
+        return await client.scan(cursor, match=match, count=count)
+
+    async def scan_iter(self, match: Optional[str] = None, count: int = 100) -> AsyncGenerator[str, None]:
+        """异步迭代扫描键"""
+        client = self._ensure_initialized()
+        async for key in client.scan_iter(match=match, count=count):
+            yield key
+
+    # === 上下文管理器 ===
     async def __aenter__(self) -> "RedisClient":
-        await redis_manager.initialize()
+        await self.initialize()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
-        # 不再关闭连接，让管理器管理连接生命周期
+        # 不关闭连接，由应用程序生命周期管理
         pass
 
-    async def get(self, key: str) -> Optional[str]:
-        """获取键值"""
-        try:
-            return await redis_manager.client.get(key)
-        except RedisError as e:
-            logger.error(f"Redis GET {key} failed: {str(e)}")
-            raise
+    # === 便捷方法 ===
+    async def get_or_set(self, key: str, value_func: Callable, ex: Optional[int] = None) -> str:
+        """获取键值，如果不存在则设置"""
+        result = await self.get(key)
+        if result is None:
+            if asyncio.iscoroutinefunction(value_func):
+                result = await value_func()
+            else:
+                result = value_func()
+            await self.set(key, result, ex=ex)
+        return result
 
-    async def set(self, key: str, value: Union[str, bytes], ex: Optional[int] = None) -> bool:
-        """设置键值"""
-        try:
-            return await redis_manager.client.set(key, value, ex=ex)
-        except RedisError as e:
-            logger.error(f"Redis SET {key} failed: {str(e)}")
-            raise
-
-    async def delete(self, *keys: str) -> int:
-        """删除键"""
-        try:
-            return await redis_manager.client.delete(*keys)
-        except RedisError as e:
-            logger.error(f"Redis DELETE {keys} failed: {str(e)}")
-            raise
-
-    async def exists(self, *keys: str) -> int:
-        """检查键是否存在"""
-        try:
-            return await redis_manager.client.exists(*keys)
-        except RedisError as e:
-            logger.error(f"Redis EXISTS {keys} failed: {str(e)}")
-            raise
-
-    async def expire(self, key: str, seconds: int) -> bool:
-        """设置过期时间"""
-        try:
-            return await redis_manager.client.expire(key, seconds)
-        except RedisError as e:
-            logger.error(f"Redis EXPIRE {key} failed: {str(e)}")
-            raise
-
-    async def ping(self) -> bool:
-        """检查连接"""
-        return await redis_manager.ping()
-
-    async def sadd(self, key: str, *values: str) -> int:
-        """向集合添加元素"""
-        try:
-            return await redis_manager.client.sadd(key, *values)
-        except RedisError as e:
-            logger.error(f"Redis SADD {key} failed: {str(e)}")
-            raise
-
-    async def smembers(self, key: str) -> set:
-        """获取集合所有元素"""
-        try:
-            return await redis_manager.client.smembers(key)
-        except RedisError as e:
-            logger.error(f"Redis SMEMBERS {key} failed: {str(e)}")
-            raise
-
-    async def srem(self, key: str, *values: str) -> int:
-        """从集合删除元素"""
-        try:
-            return await redis_manager.client.srem(key, *values)
-        except RedisError as e:
-            logger.error(f"Redis SREM {key} failed: {str(e)}")
-            raise
-
-    async def keys(self, pattern: str) -> list:
-        """获取匹配模式的键"""
-        try:
-            return await redis_manager.client.keys(pattern)
-        except RedisError as e:
-            logger.error(f"Redis KEYS {pattern} failed: {str(e)}")
-            raise
+    async def increment_with_expire(self, key: str, amount: int = 1, ex: int = 3600) -> int:
+        """递增计数器并设置过期时间"""
+        client = self._ensure_initialized()
+        async with client.pipeline() as pipe:
+            await pipe.incr(key, amount)
+            await pipe.expire(key, ex)
+            results = await pipe.execute()
+            return results[0]
 
 
-# 便捷函数，用于获取Redis客户端管理器
-def get_redis_manager() -> RedisClientManager:
-    """获取Redis客户端管理器实例"""
-    return redis_manager
+# 全局单例实例
+redis_client = RedisClient()
+
+
+# === 便捷函数 ===
+@asynccontextmanager
+async def get_redis() -> AsyncGenerator[RedisClient, None]:
+    """异步上下文管理器，获取已初始化的Redis客户端"""
+    async with redis_client as client:
+        yield client
+
+
+async def init_redis() -> None:
+    """初始化Redis客户端"""
+    await redis_client.initialize()
+
+
+async def close_redis() -> None:
+    """关闭Redis客户端"""
+    await redis_client.close()

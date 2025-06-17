@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, asdict
 
-from copilot.utils.redis_client import RedisClient
+from copilot.utils.redis_client import get_redis
 from copilot.utils.logger import logger
 
 
@@ -67,7 +67,7 @@ class SessionManager:
             session_id=session_id, user_id=user_id, window_id=window_id, created_at=now, last_activity=now, context={}, thread_id=thread_id
         )
 
-        async with RedisClient() as redis:
+        async with get_redis() as redis:
             # 保存会话信息到Redis
             session_key = f"{self.redis_prefix}{session_id}"
             session_data = self._serialize_session(session_info)
@@ -99,7 +99,7 @@ class SessionManager:
         Returns:
             SessionInfo or None
         """
-        async with RedisClient() as redis:
+        async with get_redis() as redis:
             session_key = f"{self.redis_prefix}{session_id}"
             session_data = await redis.get(session_key)
 
@@ -149,7 +149,7 @@ class SessionManager:
                 )
 
                 # 重新保存到Redis
-                async with RedisClient() as redis:
+                async with get_redis() as redis:
                     session_key = f"{self.redis_prefix}{session_id}"
                     session_data = self._serialize_session(session_info)
                     await redis.set(session_key, session_data, ex=self.session_timeout)
@@ -181,7 +181,7 @@ class SessionManager:
 
         session_info.context.update(context)
 
-        async with RedisClient() as redis:
+        async with get_redis() as redis:
             session_key = f"{self.redis_prefix}{session_id}"
             session_data = self._serialize_session(session_info)
             await redis.set(session_key, session_data, ex=self.session_timeout)
@@ -196,7 +196,7 @@ class SessionManager:
         Returns:
             List[SessionInfo]: 用户的所有活跃会话
         """
-        async with RedisClient() as redis:
+        async with get_redis() as redis:
             user_sessions_key = f"{self.user_sessions_prefix}{user_id}"
             session_ids = await redis.smembers(user_sessions_key)
 
@@ -223,7 +223,7 @@ class SessionManager:
         if not session_info:
             return
 
-        async with RedisClient() as redis:
+        async with get_redis() as redis:
             # 删除Redis中的会话数据
             session_key = f"{self.redis_prefix}{session_id}"
             await redis.delete(session_key)
@@ -245,7 +245,7 @@ class SessionManager:
         """清理过期会话（可以作为定时任务运行）"""
         # Redis的过期机制会自动清理过期的键
         # 这里主要是清理用户会话列表中的无效引用
-        async with RedisClient() as redis:
+        async with get_redis() as redis:
             # 获取所有用户会话键
             pattern = f"{self.user_sessions_prefix}*"
             keys = await redis.keys(pattern)

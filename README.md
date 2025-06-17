@@ -107,16 +107,33 @@ async def example():
 ### Redis操作
 
 ```python
-from copilot.utils.redis_client import RedisClient
+from copilot.utils.redis_client import get_redis, redis_client
 
+# 推荐方式：使用上下文管理器
 async def example():
-    async with RedisClient() as redis:
+    async with get_redis() as redis:
         # 设置键值
         await redis.set("key", "value", ex=3600)
         
         # 获取键值
         value = await redis.get("key")
         print(value)
+        
+        # 集合操作
+        await redis.sadd("myset", "item1", "item2")
+        members = await redis.smembers("myset")
+
+# 简单方式：直接使用全局实例
+async def simple_example():
+    await redis_client.set("simple_key", "simple_value")
+    value = await redis_client.get("simple_key")
+    
+    # 便捷方法：缓存模式
+    result = await redis_client.get_or_set(
+        "cache_key", 
+        lambda: "expensive_result", 
+        ex=300
+    )
 ```
 
 ## 🔧 运行示例

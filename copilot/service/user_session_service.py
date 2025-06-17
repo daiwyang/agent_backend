@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
-from copilot.utils.redis_client import get_redis_manager
+from copilot.utils.redis_client import redis_client
 from copilot.utils.logger import logger
 
 
@@ -16,7 +16,7 @@ class UserSessionService:
     """用户会话管理服务"""
     
     def __init__(self):
-        self.redis_client = get_redis_manager()
+        self.redis_client = redis_client
         # Redis键前缀
         self.session_prefix = "user_session:"
         self.user_sessions_prefix = "user_sessions:"
