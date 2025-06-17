@@ -112,6 +112,42 @@ class ChatService:
             logger.error(f"Error in chat_stream for session {session_id}: {str(e)}")
             yield {"error": "处理请求时出现错误"}
 
+    async def chat_multimodal(self, session_id: str, message: str, attachments: List[dict] = None) -> ChatResponse:
+        """
+        多模态聊天接口
+
+        Args:
+            session_id: 会话ID
+            message: 用户消息
+            attachments: 附件列表（包含图片）
+
+        Returns:
+            ChatResponse: 聊天响应
+        """
+        session_info = await session_manager.get_session(session_id)
+        if not session_info:
+            raise ValueError(f"Session {session_id} not found or expired")
+
+        # 提取图片附件
+        images = []
+        if attachments:
+            images = [att for att in attachments if att.get("type") == "image"]
+
+        # 使用核心Agent进行多模态聊天
+        if images:
+            response_content = await self.core_agent.process_multimodal_input(session_info.thread_id, message, images)
+        else:
+            response_content = await self.core_agent.chat(session_info.thread_id, message)
+
+        # 保存消息到数据库（包含附件信息）
+        await self._save_multimodal_messages(session_id, message, response_content, attachments)
+
+        # 更新会话活动时间
+        await session_manager.get_session(session_id)
+
+        response_message = ChatMessage(role="assistant", content=response_content)
+        return ChatResponse(session_id=session_id, messages=[response_message], context=session_info.context)
+
     async def _save_messages(self, session_id: str, user_message: str, assistant_message: str):
         """保存消息到数据库"""
         try:
@@ -124,6 +160,14 @@ class ChatService:
             )
         except Exception as e:
             logger.warning(f"Failed to save messages to database: {str(e)}")
+
+    async def _save_multimodal_messages(self, session_id: str, user_message: str, assistant_message: str, attachments: List[dict] = None):
+        """保存多模态消息，包含附件信息"""
+        user_msg_data = {"role": "user", "content": user_message, "attachments": attachments or []}
+
+        assistant_msg_data = {"role": "assistant", "content": assistant_message}
+
+        await self.chat_history_manager.save_messages(session_id, [user_msg_data, assistant_msg_data])
 
     # 会话管理方法
     async def get_user_sessions(self, user_id: str) -> List[SessionInfo]:

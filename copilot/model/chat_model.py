@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel
 
@@ -47,6 +47,25 @@ class ChatHistoryResponse(BaseModel):
     session_id: str
     messages: List[ChatMessage]
     total_count: int
+
+
+# 新增：多模态聊天请求模型
+class MultiModalChatRequest(BaseModel):
+    """多模态聊天请求模型，支持文本和图片"""
+
+    session_id: str
+    message: str
+    attachments: Optional[List[Dict[str, str]]] = None  # 支持图片等附件
+
+
+class ImageAttachment(BaseModel):
+    """图片附件模型"""
+
+    type: str = "image"  # image, file, etc.
+    url: Optional[str] = None  # 图片URL
+    base64: Optional[str] = None  # base64编码的图片数据
+    mime_type: str = None  # 图片MIME类型，如image/jpeg, image/png等
+    filename: Optional[str] = None
 
 
 class SearchRequest(BaseModel):
