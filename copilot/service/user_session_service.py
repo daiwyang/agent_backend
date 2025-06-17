@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
-from copilot.utils.redis_client import redis_client
+from copilot.utils.redis_client import get_redis
 from copilot.utils.logger import logger
 
 
@@ -16,7 +16,6 @@ class UserSessionService:
     """用户会话管理服务"""
     
     def __init__(self):
-        self.redis_client = redis_client
         # Redis键前缀
         self.session_prefix = "user_session:"
         self.user_sessions_prefix = "user_sessions:"
@@ -39,12 +38,11 @@ class UserSessionService:
             expire_seconds: 过期时间（秒）
             
         Returns:
-            session_id: 会话ID
+            会话ID
         """
         session_id = str(uuid.uuid4())
         expire_time = expire_seconds or self.default_session_expire
         
-        # 创建会话数据
         session_data = {
             "session_id": session_id,
             "user_id": user_id,
@@ -59,16 +57,17 @@ class UserSessionService:
         try:
             # 存储会话数据
             session_key = f"{self.session_prefix}{session_id}"
-            await self.redis_client.set(session_key, json.dumps(session_data), ex=expire_time)
-            
-            # 存储token到session_id的映射
-            token_key = f"{self.token_prefix}{token}"
-            await self.redis_client.set(token_key, session_id, ex=self.token_expire)
-            
-            # 将session_id添加到用户的会话集合中
-            user_sessions_key = f"{self.user_sessions_prefix}{user_id}"
-            await self.redis_client.sadd(user_sessions_key, session_id)
-            await self.redis_client.expire(user_sessions_key, expire_time)
+            async with get_redis() as redis:
+                await redis.set(session_key, json.dumps(session_data), ex=expire_time)
+                
+                # 存储token到session_id的映射
+                token_key = f"{self.token_prefix}{token}"
+                await redis.set(token_key, session_id, ex=self.token_expire)
+                
+                # 将session_id添加到用户的会话集合中
+                user_sessions_key = f"{self.user_sessions_prefix}{user_id}"
+                await redis.sadd(user_sessions_key, session_id)
+                await redis.expire(user_sessions_key, expire_time)
             
             logger.info(f"Created session {session_id} for user {username}")
             return session_id
@@ -90,7 +89,8 @@ class UserSessionService:
         try:
             # 从token获取session_id
             token_key = f"{self.token_prefix}{token}"
-            session_id = await self.redis_client.get(token_key)
+            async with get_redis() as redis:
+                session_id = await redis.get(token_key)
             
             if not session_id:
                 return None
@@ -114,7 +114,8 @@ class UserSessionService:
         """
         try:
             session_key = f"{self.session_prefix}{session_id}"
-            session_data = await self.redis_client.get(session_key)
+            async with get_redis() as redis:
+                session_data = await redis.get(session_key)
             
             if not session_data:
                 return None
@@ -142,19 +143,20 @@ class UserSessionService:
         """
         try:
             session_key = f"{self.session_prefix}{session_id}"
-            session_data = await self.redis_client.get(session_key)
-            
-            if not session_data:
-                return False
-            
-            session_dict = json.loads(session_data)
-            session_dict["last_active"] = datetime.now(timezone.utc).isoformat()
-            
-            # 获取剩余TTL并重新设置
-            ttl = await self.redis_client.ttl(session_key)
-            if ttl > 0:
-                await self.redis_client.set(session_key, json.dumps(session_dict), ex=ttl)
-                return True
+            async with get_redis() as redis:
+                session_data = await redis.get(session_key)
+                
+                if not session_data:
+                    return False
+                
+                session_dict = json.loads(session_data)
+                session_dict["last_active"] = datetime.now(timezone.utc).isoformat()
+                
+                # 获取剩余TTL并重新设置
+                ttl = await redis.ttl(session_key)
+                if ttl > 0:
+                    await redis.set(session_key, json.dumps(session_dict), ex=ttl)
+                    return True
             
             return False
             
@@ -174,7 +176,8 @@ class UserSessionService:
         """
         try:
             user_sessions_key = f"{self.user_sessions_prefix}{user_id}"
-            session_ids = await self.redis_client.smembers(user_sessions_key)
+            async with get_redis() as redis:
+                session_ids = await redis.smembers(user_sessions_key)
             
             sessions = []
             for session_id in session_ids:
@@ -183,75 +186,75 @@ class UserSessionService:
                     sessions.append(session_data)
                 else:
                     # 清理无效的session_id
-                    await self.redis_client.srem(user_sessions_key, session_id)
+                    async with get_redis() as redis:
+                        await redis.srem(user_sessions_key, session_id)
             
             return sessions
             
         except Exception as e:
-            logger.error(f"Failed to get user sessions for {user_id}: {str(e)}")
+            logger.error(f"Failed to get user sessions for user {user_id}: {str(e)}")
             return []
     
-    async def revoke_session(self, session_id: str) -> bool:
+    async def delete_session(self, session_id: str) -> bool:
         """
-        撤销/删除会话
+        删除指定会话
         
         Args:
             session_id: 会话ID
             
         Returns:
-            是否撤销成功
+            是否删除成功
         """
         try:
-            # 获取会话数据
+            session_key = f"{self.session_prefix}{session_id}"
+            
+            # 先获取会话信息以便清理相关数据
             session_data = await self.get_session_by_id(session_id)
             if not session_data:
-                return False
+                return True  # 会话不存在，认为删除成功
             
-            user_id = session_data["user_id"]
-            token = session_data["token"]
+            async with get_redis() as redis:
+                # 删除会话数据
+                await redis.delete(session_key)
+                
+                # 删除token映射
+                token_key = f"{self.token_prefix}{session_data['token']}"
+                await redis.delete(token_key)
+                
+                # 从用户会话集合中移除
+                user_sessions_key = f"{self.user_sessions_prefix}{session_data['user_id']}"
+                await redis.srem(user_sessions_key, session_id)
             
-            # 删除会话数据
-            session_key = f"{self.session_prefix}{session_id}"
-            await self.redis_client.delete(session_key)
-            
-            # 删除token映射
-            token_key = f"{self.token_prefix}{token}"
-            await self.redis_client.delete(token_key)
-            
-            # 从用户会话集合中移除
-            user_sessions_key = f"{self.user_sessions_prefix}{user_id}"
-            await self.redis_client.srem(user_sessions_key, session_id)
-            
-            logger.info(f"Revoked session {session_id} for user {user_id}")
+            logger.info(f"Deleted session {session_id}")
             return True
             
         except Exception as e:
-            logger.error(f"Failed to revoke session {session_id}: {str(e)}")
+            logger.error(f"Failed to delete session {session_id}: {str(e)}")
             return False
     
-    async def revoke_user_sessions(self, user_id: str) -> int:
+    async def delete_user_sessions(self, user_id: str) -> int:
         """
-        撤销用户的所有会话
+        删除用户的所有会话
         
         Args:
             user_id: 用户ID
             
         Returns:
-            撤销的会话数量
+            删除的会话数量
         """
         try:
             sessions = await self.get_user_sessions(user_id)
-            revoked_count = 0
+            deleted_count = 0
             
             for session in sessions:
-                if await self.revoke_session(session["session_id"]):
-                    revoked_count += 1
+                if await self.delete_session(session["session_id"]):
+                    deleted_count += 1
             
-            logger.info(f"Revoked {revoked_count} sessions for user {user_id}")
-            return revoked_count
+            logger.info(f"Deleted {deleted_count} sessions for user {user_id}")
+            return deleted_count
             
         except Exception as e:
-            logger.error(f"Failed to revoke user sessions for {user_id}: {str(e)}")
+            logger.error(f"Failed to delete user sessions for user {user_id}: {str(e)}")
             return 0
     
     async def cleanup_expired_sessions(self) -> int:
@@ -262,74 +265,91 @@ class UserSessionService:
             清理的会话数量
         """
         try:
-            # 获取所有会话键
-            session_keys = await self.redis_client.keys(f"{self.session_prefix}*")
-            expired_count = 0
+            cleaned_count = 0
+            async with get_redis() as redis:
+                # 获取所有会话键
+                session_keys = await redis.keys(f"{self.session_prefix}*")
             
             for session_key in session_keys:
-                # Redis会自动处理过期键，这里主要是清理用户会话集合中的引用
-                session_data = await self.redis_client.get(session_key)
-                if not session_data:
-                    # 从session_key中提取session_id
-                    session_id = session_key.replace(self.session_prefix, "")
-                    
-                    # 从所有用户会话集合中移除这个session_id
-                    user_sessions_keys = await self.redis_client.keys(f"{self.user_sessions_prefix}*")
-                    for user_sessions_key in user_sessions_keys:
-                        await self.redis_client.srem(user_sessions_key, session_id)
-                    
-                    expired_count += 1
+                try:
+                    async with get_redis() as redis:
+                        session_data = await redis.get(session_key)
+                    if not session_data:
+                        # 会话已过期或不存在
+                        session_id = session_key.replace(self.session_prefix, "")
+                        # 清理可能残留的用户会话集合引用
+                        async with get_redis() as redis:
+                            user_sessions_keys = await redis.keys(f"{self.user_sessions_prefix}*")
+                        for user_sessions_key in user_sessions_keys:
+                            async with get_redis() as redis:
+                                await redis.srem(user_sessions_key, session_id)
+                        cleaned_count += 1
+                
+                except Exception as e:
+                    logger.warning(f"Error processing session key {session_key}: {str(e)}")
+                    continue
             
-            logger.info(f"Cleaned up {expired_count} expired sessions")
-            return expired_count
+            logger.info(f"Cleaned up {cleaned_count} expired sessions")
+            return cleaned_count
             
         except Exception as e:
             logger.error(f"Failed to cleanup expired sessions: {str(e)}")
             return 0
     
-    async def is_session_valid(self, session_id: str) -> bool:
+    async def get_session_info(self, session_id: str) -> Optional[Dict]:
         """
-        检查会话是否有效
+        获取会话基本信息（不更新活跃时间）
         
         Args:
             session_id: 会话ID
             
         Returns:
-            会话是否有效
+            会话信息字典或None
         """
-        session_data = await self.get_session_by_id(session_id)
-        return session_data is not None
+        try:
+            session_key = f"{self.session_prefix}{session_id}"
+            async with get_redis() as redis:
+                session_data = await redis.get(session_key)
+            
+            if not session_data:
+                return None
+            
+            return json.loads(session_data)
+            
+        except Exception as e:
+            logger.error(f"Failed to get session info {session_id}: {str(e)}")
+            return None
     
-    async def extend_session(self, session_id: str, extend_seconds: int = None) -> bool:
+    async def extend_session(self, session_id: str, extend_seconds: int = 3600) -> bool:
         """
         延长会话过期时间
         
         Args:
             session_id: 会话ID
-            extend_seconds: 延长时间（秒）
+            extend_seconds: 延长时间（秒），默认1小时
             
         Returns:
             是否延长成功
         """
         try:
-            extend_time = extend_seconds or self.default_session_expire
             session_key = f"{self.session_prefix}{session_id}"
-            
-            # 检查会话是否存在
-            if not await self.redis_client.exists(session_key):
-                return False
-            
-            # 延长过期时间
-            await self.redis_client.expire(session_key, extend_time)
-            
-            # 更新会话数据中的过期时间
-            session_data = await self.redis_client.get(session_key)
+            async with get_redis() as redis:
+                # 检查会话是否存在
+                if not await redis.exists(session_key):
+                    return False
+                
+                # 延长过期时间
+                await redis.expire(session_key, extend_seconds)
+                
+                # 更新会话数据中的过期时间
+                session_data = await redis.get(session_key)
             if session_data:
                 session_dict = json.loads(session_data)
-                session_dict["expires_at"] = (datetime.now(timezone.utc) + timedelta(seconds=extend_time)).isoformat()
-                await self.redis_client.set(session_key, json.dumps(session_dict), ex=extend_time)
+                session_dict["expires_at"] = (datetime.now(timezone.utc) + timedelta(seconds=extend_seconds)).isoformat()
+                async with get_redis() as redis:
+                    await redis.set(session_key, json.dumps(session_dict), ex=extend_seconds)
             
-            logger.info(f"Extended session {session_id} by {extend_time} seconds")
+            logger.info(f"Extended session {session_id} by {extend_seconds} seconds")
             return True
             
         except Exception as e:
@@ -337,10 +357,13 @@ class UserSessionService:
             return False
 
 
-# 创建全局会话服务实例
-user_session_service = UserSessionService()
+# 创建全局实例
+_user_session_service: Optional[UserSessionService] = None
 
 
 def get_user_session_service() -> UserSessionService:
-    """获取用户会话服务实例"""
-    return user_session_service
+    """获取用户会话服务实例（单例模式）"""
+    global _user_session_service
+    if _user_session_service is None:
+        _user_session_service = UserSessionService()
+    return _user_session_service

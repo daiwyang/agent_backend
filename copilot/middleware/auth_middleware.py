@@ -35,17 +35,22 @@ class AuthenticationMiddleware:
     async def authenticate_request(self, request: Request, call_next):
         """用户认证中间件"""
         path = request.url.path
+        logger.debug(f"Processing request path: {path}")
 
         # 检查是否为公开路径
         if any(path.startswith(public_path) for public_path in self.public_paths):
+            logger.debug(f"Path {path} is public, skipping authentication")
             return await call_next(request)
 
         # 检查是否为需要保护的路径
         if any(path.startswith(protected_path) for protected_path in self.protected_paths):
+            logger.debug(f"Path {path} requires authentication")
             # 获取Authorization header
             authorization = request.headers.get("Authorization")
+            logger.debug(f"Authorization header: {authorization[:50] if authorization else 'None'}...")
 
             if not authorization:
+                logger.warning(f"Missing authorization header for path: {path}")
                 return JSONResponse(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     content={"code": 401, "message": "缺少认证信息", "detail": "请提供有效的Authorization header"},

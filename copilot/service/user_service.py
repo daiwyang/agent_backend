@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import jwt
+from jwt.exceptions import InvalidTokenError
 from fastapi import HTTPException, status
 
 from copilot.model.user_model import UserRegisterRequest, UserResponse
