@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request
 
 from copilot.model.user_model import BaseResponse, UserLoginRequest, UserLoginResponse, UserRegisterRequest, UserResponse, UserUpdateRequest
 from copilot.service.user_service import UserService
-from copilot.utils.auth import get_current_active_user
+from copilot.utils.auth import get_current_user
 from copilot.utils.logger import logger
 from copilot.utils.error_codes import ErrorCodes, ErrorHandler, raise_auth_error, raise_user_error
 
@@ -80,7 +80,7 @@ async def login(login_data: UserLoginRequest):
 
 
 @router.get("/me", response_model=UserResponse, summary="获取当前用户信息")
-async def get_current_user_info(current_user: dict = Depends(get_current_active_user)):
+async def get_current_user_info(current_user: dict = Depends(get_current_user)):
     """
     获取当前登录用户的信息
 
@@ -110,7 +110,7 @@ async def get_user_profile(user_id: str):
 
 
 @router.put("/me", response_model=BaseResponse, summary="更新当前用户信息")
-async def update_current_user(update_data: UserUpdateRequest, current_user: dict = Depends(get_current_active_user)):
+async def update_current_user(update_data: UserUpdateRequest, current_user: dict = Depends(get_current_user)):
     """
     更新当前登录用户的信息
 
@@ -149,7 +149,7 @@ async def update_current_user(update_data: UserUpdateRequest, current_user: dict
 
 
 @router.post("/logout", response_model=BaseResponse, summary="用户退出登录")
-async def logout(request: Request, current_user: dict = Depends(get_current_active_user)):
+async def logout(request: Request, current_user: dict = Depends(get_current_user)):
     """
     用户退出登录
 
@@ -183,7 +183,7 @@ async def health_check():
 
 
 @router.get("/sessions", summary="获取当前用户的所有会话")
-async def get_user_sessions(current_user: dict = Depends(get_current_active_user)):
+async def get_user_sessions(current_user: dict = Depends(get_current_user)):
     """
     获取当前用户的所有活跃会话
 
@@ -198,7 +198,7 @@ async def get_user_sessions(current_user: dict = Depends(get_current_active_user
 
 
 @router.post("/logout-all", response_model=BaseResponse, summary="退出所有设备登录")
-async def logout_all_sessions(current_user: dict = Depends(get_current_active_user)):
+async def logout_all_sessions(current_user: dict = Depends(get_current_user)):
     """
     用户退出所有设备的登录
 
@@ -216,7 +216,7 @@ async def logout_all_sessions(current_user: dict = Depends(get_current_active_us
 
 
 @router.delete("/sessions/{session_id}", response_model=BaseResponse, summary="撤销指定会话")
-async def revoke_session(session_id: str, current_user: dict = Depends(get_current_active_user)):
+async def revoke_session(session_id: str, current_user: dict = Depends(get_current_user)):
     """
     撤销指定的会话
 

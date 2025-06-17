@@ -151,7 +151,7 @@ class UserSessionService:
             session_dict["last_active"] = datetime.now(timezone.utc).isoformat()
             
             # 获取剩余TTL并重新设置
-            ttl = await self.redis_client.client.ttl(session_key)
+            ttl = await self.redis_client.ttl(session_key)
             if ttl > 0:
                 await self.redis_client.set(session_key, json.dumps(session_dict), ex=ttl)
                 return True

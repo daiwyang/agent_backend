@@ -8,7 +8,7 @@ import aiohttp
 import json
 from typing import Optional, Tuple
 
-from test_config import (
+from tests.test_config import (
     TestConfig, 
     create_auth_headers, 
     create_json_headers,
