@@ -1,6 +1,6 @@
 """
 简化后的认证工具模块
-提供JWT认证相关的依赖项和工具函数
+提供认证相关的依赖项和工具函数
 """
 
 from typing import Optional

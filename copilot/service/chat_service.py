@@ -2,12 +2,12 @@
 会话服务 - 处理会话相关的业务逻辑
 """
 
-import asyncio
-from typing import List, Dict, Any, AsyncGenerator
 from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, AsyncGenerator, Dict, List
 
 from copilot.core.agent import CoreAgent
-from copilot.core.session_manager import session_manager, SessionInfo
+from copilot.core.session_manager import SessionInfo, session_manager
 from copilot.utils.logger import logger
 
 
@@ -194,7 +194,7 @@ class ChatService:
     async def _save_messages(self, session_id: str, user_message: str, assistant_message: str):
         """保存消息到数据库"""
         try:
-            timestamp = asyncio.get_event_loop().time()
+            timestamp = datetime.now().isoformat()
 
             await self.chat_history_manager.save_message(session_id=session_id, role="user", content=user_message, metadata={"timestamp": timestamp})
 
@@ -206,11 +206,19 @@ class ChatService:
 
     async def _save_multimodal_messages(self, session_id: str, user_message: str, assistant_message: str, attachments: List[dict] = None):
         """保存多模态消息，包含附件信息"""
-        user_msg_data = {"role": "user", "content": user_message, "attachments": attachments or []}
+        try:
+            timestamp = datetime.now().isoformat()
+            
+            # 保存用户消息（包含附件信息）
+            user_metadata = {"timestamp": timestamp, "attachments": attachments or []}
+            await self.chat_history_manager.save_message(session_id=session_id, role="user", content=user_message, metadata=user_metadata)
 
-        assistant_msg_data = {"role": "assistant", "content": assistant_message}
-
-        await self.chat_history_manager.save_messages(session_id, [user_msg_data, assistant_msg_data])
+            # 保存助手回复
+            assistant_metadata = {"timestamp": timestamp}
+            await self.chat_history_manager.save_message(session_id=session_id, role="assistant", content=assistant_message, metadata=assistant_metadata)
+            
+        except Exception as e:
+            logger.warning(f"Failed to save multimodal messages to database: {str(e)}")
 
     # 会话管理方法
     async def get_user_sessions(self, user_id: str) -> List[SessionInfo]:
