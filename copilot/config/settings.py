@@ -30,5 +30,3 @@ def load_yaml_config() -> dict:
 
 
 conf = load_yaml_config()
-
-print(conf)
