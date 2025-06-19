@@ -8,18 +8,11 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-import jwt
-from jwt.exceptions import InvalidTokenError
-from fastapi import HTTPException, status
-
 from copilot.model.user_model import UserRegisterRequest, UserResponse
-from copilot.utils.mongo_client import get_mongo_manager
 from copilot.service.user_session_service import get_user_session_service
+from copilot.utils.error_codes import ErrorCodes, ErrorHandler, raise_auth_error, raise_system_error, raise_user_error
 from copilot.utils.logger import logger
-from copilot.utils.error_codes import (
-    ErrorCodes, ErrorHandler, 
-    raise_auth_error, raise_user_error, raise_system_error
-)
+from copilot.utils.mongo_client import get_mongo_manager
 
 
 class UserService:
@@ -45,12 +38,7 @@ class UserService:
         """创建随机token并存入Redis"""
         logger.debug(f"Creating access token for user: {username}")
         token = str(uuid.uuid4())
-        await self.session_service.create_user_session(
-            user_id=user_id,
-            username=username,
-            token=token,
-            expire_seconds=24*3600  # 24小时有效期
-        )
+        await self.session_service.create_user_session(user_id=user_id, username=username, token=token, expire_seconds=24 * 3600)  # 24小时有效期
         logger.debug(f"Access token created successfully for user: {username}")
         return token
 
@@ -67,12 +55,6 @@ class UserService:
         except Exception as e:
             logger.error(f"Token verification error: {str(e)}")
             return None
-        except jwt.ExpiredSignatureError:
-            logger.warning("Token verification failed: token expired")
-            return None
-        except jwt.InvalidTokenError:
-            logger.warning("Token verification failed: invalid token")
-            return None
         except Exception as e:
             # 记录错误但不抛出异常，返回None表示验证失败
             logger.error(f"Token verification error: {str(e)}")
@@ -85,12 +67,12 @@ class UserService:
             mongo_manager = await get_mongo_manager()
             collection = await mongo_manager.get_collection(self.collection_name)
             user = await collection.find_one({"username": username})
-            
+
             if user:
                 logger.debug(f"User found: {username}")
             else:
                 logger.debug(f"User not found: {username}")
-            
+
             return user
         except Exception as e:
             logger.error(f"Failed to get user by username {username}: {str(e)}")
@@ -103,12 +85,12 @@ class UserService:
             mongo_manager = await get_mongo_manager()
             collection = await mongo_manager.get_collection(self.collection_name)
             user = await collection.find_one({"email": email})
-            
+
             if user:
                 logger.debug(f"User found by email: {email}")
             else:
                 logger.debug(f"User not found by email: {email}")
-            
+
             return user
         except Exception as e:
             logger.error(f"Failed to get user by email {email}: {str(e)}")
@@ -117,7 +99,7 @@ class UserService:
     async def register_user(self, user_data: UserRegisterRequest) -> UserResponse:
         """用户注册"""
         logger.info(f"Starting user registration for username: {user_data.username}")
-        
+
         # 检查用户名是否已存在
         existing_user = await self.get_user_by_username(user_data.username)
         if existing_user:
@@ -149,7 +131,7 @@ class UserService:
             mongo_manager = await get_mongo_manager()
             collection = await mongo_manager.get_collection(self.collection_name)
             await collection.insert_one(user_dict)
-            
+
             logger.info(f"User registration successful: {user_data.username} (ID: {user_id})")
 
             return UserResponse(
@@ -171,52 +153,49 @@ class UserService:
         if not user:
             logger.warning(f"Authentication failed: user not found: {username}")
             return None
-        
+
         if not await self.verify_password(password, user["password_hash"]):
             logger.warning(f"Authentication failed: invalid password for user: {username}")
             return None
-        
+
         logger.info(f"User authentication successful: {username}")
         return user
-    
+
     async def login_user(self, username: str, password: str, device_info: Optional[dict] = None) -> Optional[dict]:
         """
         用户登录，创建JWT token和Redis会话
-        
+
         Args:
             username: 用户名
             password: 密码
             device_info: 设备信息（可选）
-            
+
         Returns:
             包含token和用户信息的字典，或None（登录失败）
         """
         logger.info(f"User login attempt: {username}")
-        
+
         # 验证用户身份
         user = await self.authenticate_user(username, password)
         if not user:
             logger.warning(f"Login failed: invalid credentials for user: {username}")
             return None
-        
+
         # 检查用户是否被禁用
         if not user.get("is_active", True):
             logger.warning(f"Login failed: user account disabled: {username}")
             raise_auth_error(ErrorCodes.ACCOUNT_DISABLED)
-        
+
         try:
             # 创建随机token并存入Redis
-            access_token = await self.create_access_token(
-                user_id=user["user_id"],
-                username=user["username"]
-            )
-            
+            access_token = await self.create_access_token(user_id=user["user_id"], username=user["username"])
+
             # 获取会话ID
             session_data = await self.session_service.get_session_by_token(access_token)
             session_id = session_data["session_id"]
-            
+
             logger.info(f"User login successful: {username} (session_id: {session_id})")
-            
+
             return {
                 "access_token": access_token,
                 "token_type": "bearer",
@@ -226,21 +205,21 @@ class UserService:
                     "username": user["username"],
                     "email": user["email"],
                     "full_name": user.get("full_name"),
-                    "is_active": user.get("is_active", True)
-                }
+                    "is_active": user.get("is_active", True),
+                },
             }
-            
+
         except Exception as e:
             logger.error(f"Login failed for user {username}: {str(e)}")
             raise ErrorHandler.handle_system_error(e, "用户登录")
-    
+
     async def logout_user(self, token: str) -> bool:
         """
         用户退出登录，清理Redis会话
-        
+
         Args:
             token: JWT token
-            
+
         Returns:
             是否退出成功
         """
@@ -248,25 +227,25 @@ class UserService:
         try:
             # 直接通过token删除会话
             result = await self.session_service.delete_session_by_token(token)
-            
+
             if result:
                 logger.info(f"User logout successful with token")
             else:
                 logger.warning("Logout failed: session not found or deletion failed")
-            
+
             return result
-            
+
         except Exception as e:
             logger.error(f"Logout failed: {str(e)}")
             return False
-    
+
     async def logout_all_sessions(self, user_id: str) -> int:
         """
         用户退出所有会话
-        
+
         Args:
             user_id: 用户ID
-            
+
         Returns:
             撤销的会话数量
         """
@@ -278,14 +257,14 @@ class UserService:
         except Exception as e:
             logger.error(f"Logout all sessions failed for user {user_id}: {str(e)}")
             return 0
-    
+
     async def get_user_sessions(self, user_id: str) -> list:
         """
         获取用户的所有活跃会话
-        
+
         Args:
             user_id: 用户ID
-            
+
         Returns:
             会话列表
         """
