@@ -65,7 +65,12 @@ class RedisClient:
             try:
                 # 创建连接池
                 self._pool = ConnectionPool.from_url(
-                    url, max_connections=max_connections, retry_on_timeout=True, socket_keepalive=True, socket_keepalive_options={}, decode_responses=True
+                    url,
+                    max_connections=max_connections,
+                    retry_on_timeout=True,
+                    socket_keepalive=True,
+                    socket_keepalive_options={},
+                    decode_responses=True,
                 )
 
                 # 创建客户端
@@ -196,6 +201,15 @@ class RedisClient:
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         # 不关闭连接，由应用程序生命周期管理
         pass
+
+    # === 列表操作 ===
+    @redis_error_handler
+    async def rpush(self, key: str, *values: Union[str, bytes, int, float]) -> int:
+        """向列表尾部添加元素，支持多种数据类型"""
+        client = self._ensure_initialized()
+        # 自动处理非字符串类型
+        processed_values = [str(v) if not isinstance(v, (str, bytes)) else v for v in values]
+        return await client.rpush(key, *processed_values)
 
     # === 便捷方法 ===
     async def get_or_set(self, key: str, value_func: Callable, ex: Optional[int] = None) -> str:

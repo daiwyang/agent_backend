@@ -3,6 +3,7 @@
 负责对话历史的持久化存储和检索
 """
 
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List
@@ -43,6 +44,7 @@ class ChatHistoryManager:
         self.sessions_collection = "chat_sessions"
         self.messages_collection = "chat_messages"
         self._mongo_manager = None
+        self._redis_client = None
 
     async def _get_mongo_manager(self):
         """获取MongoDB连接管理器"""
@@ -50,9 +52,18 @@ class ChatHistoryManager:
             self._mongo_manager = await get_mongo_manager()
         return self._mongo_manager
 
+    async def _get_redis_client(self):
+        """获取Redis客户端"""
+        if self._redis_client is None:
+            from copilot.utils.redis_client import redis_client
+
+            await redis_client.initialize()
+            self._redis_client = redis_client
+        return self._redis_client
+
     async def save_message(self, session_id: str, role: str, content: str, metadata: Dict[str, Any] = None):
         """
-        保存单条消息到数据库
+        保存单条消息到数据库和Redis
 
         Args:
             session_id: 会话ID
@@ -62,18 +73,24 @@ class ChatHistoryManager:
         """
         try:
             mongo_manager = await self._get_mongo_manager()
+            redis_client = await self._get_redis_client()
+            timestamp = datetime.now()
 
-            # 保存消息
+            # 保存到MongoDB
             messages_collection = await mongo_manager.get_collection(self.messages_collection)
-            message_doc = {"session_id": session_id, "role": role, "content": content, "timestamp": datetime.now(), "metadata": metadata or {}}
-
+            message_doc = {"session_id": session_id, "role": role, "content": content, "timestamp": timestamp, "metadata": metadata or {}}
             await messages_collection.insert_one(message_doc)
+
+            # 保存到Redis
+            redis_key = f"chat:{session_id}:messages"
+            message_data = {"role": role, "content": content, "timestamp": timestamp.isoformat(), "metadata": metadata or {}}
+            await redis_client.rpush(redis_key, json.dumps(message_data))
 
             # 更新会话的最后活动时间
             sessions_collection = await mongo_manager.get_collection(self.sessions_collection)
-            await sessions_collection.update_one({"session_id": session_id}, {"$set": {"last_activity": datetime.now()}}, upsert=False)
+            await sessions_collection.update_one({"session_id": session_id}, {"$set": {"last_activity": timestamp}}, upsert=False)
 
-            logger.debug(f"Saved message for session {session_id}")
+            logger.debug(f"Saved message for session {session_id} to both MongoDB and Redis")
 
         except Exception as e:
             logger.error(f"Failed to save message for session {session_id}: {str(e)}")
@@ -115,7 +132,7 @@ class ChatHistoryManager:
 
     async def get_session_messages(self, session_id: str, limit: int = 100, offset: int = 0) -> List[ChatHistoryMessage]:
         """
-        获取会话的消息历史
+        获取会话的消息历史，优先从Redis获取
 
         Args:
             session_id: 会话ID
@@ -126,6 +143,26 @@ class ChatHistoryManager:
             List[ChatHistoryMessage]: 消息列表
         """
         try:
+            redis_client = await self._get_redis_client()
+            redis_key = f"chat:{session_id}:messages"
+
+            # 首先尝试从Redis获取
+            redis_messages = await redis_client.lrange(redis_key, offset, offset + limit - 1)
+            if redis_messages:
+                messages = []
+                for msg_json in redis_messages:
+                    msg_data = json.loads(msg_json)
+                    messages.append(
+                        ChatHistoryMessage(
+                            role=msg_data["role"],
+                            content=msg_data["content"],
+                            timestamp=datetime.fromisoformat(msg_data["timestamp"]),
+                            metadata=msg_data.get("metadata", {}),
+                        )
+                    )
+                return messages
+
+            # Redis中没有则从MongoDB获取
             mongo_manager = await self._get_mongo_manager()
             messages_collection = await mongo_manager.get_collection(self.messages_collection)
 
