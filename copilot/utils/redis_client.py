@@ -204,12 +204,36 @@ class RedisClient:
 
     # === 列表操作 ===
     @redis_error_handler
+    async def lrange(self, key: str, start: int, end: int) -> list:
+        """获取列表指定范围内的元素"""
+        client = self._ensure_initialized()
+        return await client.lrange(key, start, end)
+
+    @redis_error_handler
+    async def lpush(self, key: str, *values: Union[str, bytes, int, float]) -> int:
+        """向列表头部添加元素"""
+        client = self._ensure_initialized()
+        processed_values = [str(v) if not isinstance(v, (str, bytes)) else v for v in values]
+        return await client.lpush(key, *processed_values)
+
+    @redis_error_handler
     async def rpush(self, key: str, *values: Union[str, bytes, int, float]) -> int:
         """向列表尾部添加元素，支持多种数据类型"""
         client = self._ensure_initialized()
-        # 自动处理非字符串类型
         processed_values = [str(v) if not isinstance(v, (str, bytes)) else v for v in values]
         return await client.rpush(key, *processed_values)
+
+    @redis_error_handler
+    async def ltrim(self, key: str, start: int, end: int) -> bool:
+        """修剪列表，只保留指定范围内的元素"""
+        client = self._ensure_initialized()
+        return await client.ltrim(key, start, end)
+
+    @redis_error_handler
+    async def llen(self, key: str) -> int:
+        """获取列表长度"""
+        client = self._ensure_initialized()
+        return await client.llen(key)
 
     # === 便捷方法 ===
     async def get_or_set(self, key: str, value_func: Callable, ex: Optional[int] = None) -> str:

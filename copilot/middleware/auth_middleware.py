@@ -74,14 +74,23 @@ class AuthenticationMiddleware:
             try:
                 logger.debug(f"Verifying token: {token[:6]}...{token[-6:]}")
                 # 验证token
-                username = await self.user_service.verify_token(token)
-                logger.debug(f"Token verification result for {token[:6]}...{token[-6:]}: username={username}")
+                session_data = await self.user_service.verify_token(token)
+                logger.debug(f"Token verification result for {token[:6]}...{token[-6:]}: session_data={session_data}")
 
-                if username is None:
+                if session_data is None:
                     logger.warning(f"Token verification failed for {token[:6]}...{token[-6:]}")
                     return JSONResponse(
                         status_code=status.HTTP_401_UNAUTHORIZED,
                         content={"code": 401, "message": "认证失败", "detail": "无效或过期的token"}
+                    )
+
+                # 从会话数据中获取用户名
+                username = session_data.get('username')
+                if not username:
+                    logger.warning(f"No username found in session data: {session_data}")
+                    return JSONResponse(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        content={"code": 401, "message": "会话数据无效", "detail": "无法获取用户名信息"}
                     )
 
                 # 获取用户信息
@@ -102,8 +111,9 @@ class AuthenticationMiddleware:
                         content={"code": 403, "message": "用户账户已被禁用", "detail": "请联系管理员激活账户"}
                     )
 
-                # 将用户信息添加到请求状态中，供后续处理使用
+                # 将用户信息和会话信息添加到请求状态中，供后续处理使用
                 request.state.current_user = user
+                request.state.session_data = session_data
                 logger.debug(f"Authentication successful for user: {username}")
 
             except Exception as e:

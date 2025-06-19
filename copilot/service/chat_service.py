@@ -35,7 +35,7 @@ class ChatService:
     def __init__(self, provider: str = None, model_name: str = None, tools: List = None, **llm_kwargs):
         """
         初始化ChatService
-        
+
         Args:
             provider: LLM提供商 (deepseek, openai, claude, moonshot, zhipu, qwen, gemini)
             model_name: 模型名称
@@ -61,7 +61,7 @@ class ChatService:
     def get_provider_info(self) -> Dict[str, Any]:
         """
         获取当前使用的提供商信息
-        
+
         Returns:
             Dict[str, Any]: 提供商信息
         """
@@ -70,12 +70,12 @@ class ChatService:
     def switch_provider(self, provider: str, model_name: str = None, **llm_kwargs) -> bool:
         """
         切换LLM提供商
-        
+
         Args:
             provider: 新的提供商
             model_name: 新的模型名称
             **llm_kwargs: 传递给LLM的额外参数
-            
+
         Returns:
             bool: 是否切换成功
         """
@@ -84,11 +84,12 @@ class ChatService:
     def get_available_providers(self) -> Dict[str, Any]:
         """
         获取可用的提供商信息
-        
+
         Returns:
             Dict[str, Any]: 可用提供商信息
         """
         from copilot.utils.llm_manager import LLMProviderManager
+
         return LLMProviderManager.get_provider_recommendations()
 
     async def chat(self, session_id: str, message: str) -> ChatResponse:
@@ -225,35 +226,13 @@ class ChatService:
         await session_manager.update_session_context(session_id, context)
 
     # 历史记录方法
-    async def get_chat_history(self, session_id: str, from_db: bool = False) -> List[ChatMessage]:
-        """获取聊天历史"""
-        if from_db:
-            try:
-                db_messages = await self.chat_history_manager.get_session_messages(session_id)
-                return [
-                    ChatMessage(role=msg.role, content=msg.content, timestamp=msg.timestamp.isoformat() if msg.timestamp else None)
-                    for msg in db_messages
-                ]
-            except Exception as e:
-                logger.error(f"Error getting chat history from database: {str(e)}")
-                return []
-        else:
-            # 从LangGraph内存获取
-            session_info = await session_manager.get_session(session_id)
-            if not session_info:
-                return []
-
-            try:
-                config = {"configurable": {"thread_id": session_info.thread_id}}
-                state = self.core_agent.graph.get_state(config)
-                messages = state.values.get("messages", [])
-
-                return [
-                    ChatMessage(
-                        role=msg.type if hasattr(msg, "type") else "unknown", content=str(msg.content) if hasattr(msg, "content") else str(msg)
-                    )
-                    for msg in messages
-                ]
-            except Exception as e:
-                logger.error(f"Error getting chat history from memory: {str(e)}")
-                return []
+    async def get_chat_history(self, session_id: str) -> List[ChatMessage]:
+        """获取聊天历史(先查Redis，查不到再从MongoDB获取)"""
+        try:
+            messages = await self.chat_history_manager.get_session_messages(session_id)
+            return [
+                ChatMessage(role=msg.role, content=msg.content, timestamp=msg.timestamp.isoformat() if msg.timestamp else None) for msg in messages
+            ]
+        except Exception as e:
+            logger.error(f"Error getting chat history: {str(e)}")
+            return []

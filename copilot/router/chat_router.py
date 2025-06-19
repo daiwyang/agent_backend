@@ -25,10 +25,7 @@ from copilot.model.chat_model import (
 from copilot.service.chat_service import ChatService
 from copilot.service.stats_service import StatsService
 from copilot.utils.auth import get_current_user_from_state
-from copilot.utils.error_codes import (
-    ErrorCodes, ErrorHandler, 
-    raise_chat_error, raise_validation_error, raise_system_error
-)
+from copilot.utils.error_codes import ErrorCodes, ErrorHandler, raise_chat_error, raise_system_error, raise_validation_error
 
 # 创建全局服务实例
 chat_service = ChatService()
@@ -42,37 +39,26 @@ router = APIRouter(prefix="/chat")
 async def get_providers():
     """获取可用的LLM提供商信息"""
     try:
-        return {
-            "current_provider": chat_service.get_provider_info(),
-            "available_providers": chat_service.get_available_providers()
-        }
+        return {"current_provider": chat_service.get_provider_info(), "available_providers": chat_service.get_available_providers()}
     except Exception as e:
         raise_system_error(f"获取提供商信息失败: {str(e)}")
 
 
 @router.post("/providers/switch")
-async def switch_provider(
-    provider: str,
-    model: Optional[str] = None,
-    current_user: dict = Depends(get_current_user_from_state)
-):
+async def switch_provider(provider: str, model: Optional[str] = None, current_user: dict = Depends(get_current_user_from_state)):
     """切换LLM提供商"""
     try:
         # 验证用户权限（可以根据需要添加管理员检查）
         user_id = current_user.get("user_id")
         if not user_id:
             raise_validation_error("用户ID缺失")
-        
+
         success = chat_service.switch_provider(provider, model)
         if success:
-            return {
-                "success": True,
-                "message": f"成功切换到提供商: {provider}",
-                "provider_info": chat_service.get_provider_info()
-            }
+            return {"success": True, "message": f"成功切换到提供商: {provider}", "provider_info": chat_service.get_provider_info()}
         else:
             raise_chat_error(f"切换提供商失败: {provider}")
-    
+
     except Exception as e:
         if isinstance(e, HTTPException):
             raise e
@@ -200,13 +186,12 @@ async def chat_non_stream(request: ChatRequest):
 @router.get("/sessions/{session_id}/history", response_model=ChatHistoryResponse)
 async def get_chat_history(
     session_id: str,
-    from_db: bool = Query(False, description="是否从数据库获取完整历史"),
     limit: int = Query(100, description="返回消息数量限制"),
     offset: int = Query(0, description="偏移量"),
 ):
     """获取会话的聊天历史"""
     try:
-        messages = await chat_service.get_chat_history(session_id, from_db=from_db)
+        messages = await chat_service.get_chat_history(session_id)
 
         # 应用分页
         total_count = len(messages)

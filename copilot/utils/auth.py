@@ -21,23 +21,22 @@ user_service = UserService()
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
     """
     获取当前用户的依赖项（合并了活跃用户检查）
-    
+
     返回:
         dict: 用户信息字典
-        
+
     抛出:
         HTTPException: 401 无效认证信息
         HTTPException: 400 用户账户被禁用
     """
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="无效的认证信息",
-        headers={"WWW-Authenticate": "Bearer"}
-    )
+    credentials_exception = HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="无效的认证信息", headers={"WWW-Authenticate": "Bearer"})
 
     try:
-        # 验证token（包含Redis会话检查）
-        username = await user_service.verify_token(credentials.credentials)
+        # 直接通过Redis验证token有效性
+        session_data = await user_service.verify_token(credentials.credentials)
+        if not session_data:
+            raise credentials_exception
+        username = session_data.get("username")
         if not username:
             raise credentials_exception
 
@@ -45,12 +44,9 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         user = await user_service.get_user_by_username(username)
         if not user:
             raise credentials_exception
-            
+
         if not user.get("is_active", True):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="用户账户已被禁用"
-            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="用户账户已被禁用")
 
         return user
     except HTTPException:
@@ -67,9 +63,5 @@ def create_token_data(username: str) -> TokenData:
 async def get_current_user_from_state(request: Request) -> dict:
     """从请求状态中获取当前用户信息的依赖项"""
     if not hasattr(request.state, "current_user"):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="用户未认证",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户未认证", headers={"WWW-Authenticate": "Bearer"})
     return request.state.current_user

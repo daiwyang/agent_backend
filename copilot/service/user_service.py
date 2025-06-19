@@ -25,10 +25,8 @@ from copilot.utils.error_codes import (
 class UserService:
     """用户服务类"""
 
-    # JWT配置
-    SECRET_KEY = "your-secret-key-here"  # 在生产环境中应该使用环境变量
-    ALGORITHM = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES = 30
+    # Token配置
+    DEFAULT_TOKEN_EXPIRE_SECONDS = 24 * 3600  # 默认24小时
 
     def __init__(self):
         self.collection_name = "users"
@@ -43,45 +41,32 @@ class UserService:
         """验证密码"""
         return hashlib.sha256(plain_password.encode()).hexdigest() == hashed_password
 
-    async def create_access_token(self, data: dict, expires_delta: Optional[timedelta] = None):
-        """创建JWT访问令牌"""
-        logger.debug(f"Creating access token for user: {data.get('sub', 'unknown')}")
-        to_encode = data.copy()
-        if expires_delta:
-            expire = datetime.now(timezone.utc) + expires_delta
-        else:
-            expire = datetime.now(timezone.utc) + timedelta(minutes=self.ACCESS_TOKEN_EXPIRE_MINUTES)
-        to_encode.update({"exp": expire})
-        encoded_jwt = jwt.encode(to_encode, self.SECRET_KEY, algorithm=self.ALGORITHM)
-        logger.debug(f"Access token created successfully for user: {data.get('sub', 'unknown')}")
-        return encoded_jwt
+    async def create_access_token(self, user_id: str, username: str) -> str:
+        """创建随机token并存入Redis"""
+        logger.debug(f"Creating access token for user: {username}")
+        token = str(uuid.uuid4())
+        await self.session_service.create_user_session(
+            user_id=user_id,
+            username=username,
+            token=token,
+            expire_seconds=24*3600  # 24小时有效期
+        )
+        logger.debug(f"Access token created successfully for user: {username}")
+        return token
 
-    async def verify_token(self, token: str) -> Optional[str]:
-        """验证JWT令牌并检查Redis会话"""
-        logger.debug("Verifying JWT token and Redis session")
+    async def verify_token(self, token: str) -> Optional[dict]:
+        """验证token有效性（纯Redis验证）"""
+        logger.debug("Verifying token in Redis")
         try:
-            # 首先验证JWT token的有效性
-            payload = jwt.decode(token, self.SECRET_KEY, algorithms=[self.ALGORITHM])
-            username: str = payload.get("sub")
-            if username is None:
-                logger.warning("Token verification failed: username not found in payload")
-                return None
-            
-            logger.debug(f"JWT token validated for user: {username}")
-            
-            # 检查Redis中的会话状态
             session_data = await self.session_service.get_session_by_token(token)
             if not session_data:
-                logger.warning(f"Token verification failed: no active session found for user {username}")
+                logger.warning("Token verification failed: no active session found")
                 return None
-            
-            # 验证会话中的用户名是否匹配
-            if session_data.get("username") != username:
-                logger.warning(f"Token verification failed: username mismatch for user {username}")
-                return None
-            
-            logger.debug(f"Token verification successful for user: {username}")
-            return username
+            logger.debug(f"Token verification successful for user: {session_data.get('username')}")
+            return session_data
+        except Exception as e:
+            logger.error(f"Token verification error: {str(e)}")
+            return None
         except jwt.ExpiredSignatureError:
             logger.warning("Token verification failed: token expired")
             return None
@@ -220,21 +205,15 @@ class UserService:
             raise_auth_error(ErrorCodes.ACCOUNT_DISABLED)
         
         try:
-            # 创建JWT token
-            access_token_expires = timedelta(minutes=self.ACCESS_TOKEN_EXPIRE_MINUTES)
+            # 创建随机token并存入Redis
             access_token = await self.create_access_token(
-                data={"sub": user["username"]}, 
-                expires_delta=access_token_expires
+                user_id=user["user_id"],
+                username=user["username"]
             )
             
-            # 在Redis中创建用户会话
-            session_id = await self.session_service.create_user_session(
-                user_id=user["user_id"],
-                username=user["username"],
-                token=access_token,
-                device_info=device_info,
-                expire_seconds=self.ACCESS_TOKEN_EXPIRE_MINUTES * 60  # 转换为秒
-            )
+            # 获取会话ID
+            session_data = await self.session_service.get_session_by_token(access_token)
+            session_id = session_data["session_id"]
             
             logger.info(f"User login successful: {username} (session_id: {session_id})")
             
@@ -267,22 +246,13 @@ class UserService:
         """
         logger.debug("User logout attempt")
         try:
-            # 获取会话信息
-            session_data = await self.session_service.get_session_by_token(token)
-            if not session_data:
-                logger.warning("Logout failed: session not found")
-                return False
-            
-            username = session_data.get("username", "unknown")
-            session_id = session_data["session_id"]
-            
-            # 撤销会话
-            result = await self.session_service.revoke_session(session_id)
+            # 直接通过token删除会话
+            result = await self.session_service.delete_session_by_token(token)
             
             if result:
-                logger.info(f"User logout successful: {username} (session_id: {session_id})")
+                logger.info(f"User logout successful with token")
             else:
-                logger.warning(f"User logout failed: {username} (session_id: {session_id})")
+                logger.warning("Logout failed: session not found or deletion failed")
             
             return result
             

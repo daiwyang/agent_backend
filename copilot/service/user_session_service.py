@@ -25,7 +25,7 @@ class UserSessionService:
         self.token_expire = 24 * 60 * 60  # 与JWT token过期时间保持一致
 
     async def create_user_session(
-        self, user_id: str, username: str, token: str, device_info: Optional[Dict] = None, expire_seconds: Optional[int] = None
+        self, user_id: str, username: str, token: str, device_info: Optional[Dict] = None, expire_seconds: int = 86400  # 默认24小时
     ) -> str:
         """
         创建用户会话
@@ -75,6 +75,45 @@ class UserSessionService:
         except Exception as e:
             logger.error(f"Failed to create session for user {username}: {str(e)}")
             raise
+
+    async def delete_session_by_token(self, token: str) -> bool:
+        """
+        通过token删除会话
+
+        Args:
+            token: JWT token
+
+        Returns:
+            是否删除成功
+        """
+        try:
+            token_key = f"{self.token_prefix}{token}"
+            async with get_redis() as redis:
+                session_id = await redis.get(token_key)
+                if not session_id:
+                    return False
+                
+                # 先获取会话数据以获取user_id
+                session_key = f"{self.session_prefix}{session_id}"
+                session_data = await redis.get(session_key)
+                
+                # 删除会话数据
+                await redis.delete(session_key)
+                
+                # 删除token映射
+                await redis.delete(token_key)
+                
+                # 从用户会话集合中移除
+                if session_data:
+                    session_dict = json.loads(session_data)
+                    user_sessions_key = f"{self.user_sessions_prefix}{session_dict['user_id']}"
+                    await redis.srem(user_sessions_key, session_id)
+                
+                logger.info(f"Successfully deleted session {session_id} by token")
+                return True
+        except Exception as e:
+            logger.error(f"Failed to delete session by token: {str(e)}")
+            return False
 
     async def get_session_by_token(self, token: str) -> Optional[Dict]:
         """
