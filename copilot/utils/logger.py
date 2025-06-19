@@ -13,6 +13,9 @@ class DefaultClientIPFilter(logging.Filter):
         # 如果clientip未在日志记录中设置，提供一个默认值
         if not hasattr(record, "clientip"):
             record.clientip = "-"
+        # 设置类名
+        if not hasattr(record, "classname"):
+            record.classname = record.funcName if record.funcName != "<module>" else "-"
         return True
 
 
@@ -30,11 +33,11 @@ def set_logger(name):
     logger.setLevel(logging.DEBUG)
 
     # 文件日志使用普通格式
-    file_format = logging.Formatter("%(asctime)s - %(clientip)s - %(filename)s LineNo:%(lineno)d - %(levelname)s - %(message)s")
+    file_format = logging.Formatter("%(asctime)s - %(clientip)s - %(filename)s LineNo:%(lineno)d Class:%(classname)s - %(levelname)s - %(message)s")
 
     # 控制台日志使用彩色格式
     console_format = colorlog.ColoredFormatter(
-        "%(blue)s%(asctime)s%(reset)s - %(log_color)s%(levelname)s%(reset)s - %(message)s",
+        "%(blue)s%(asctime)s%(reset)s - %(log_color)s%(levelname)s%(reset)s - %(filename)s:%(lineno)d - %(classname)s - %(message)s",
         log_colors={"DEBUG": "cyan", "INFO": "green", "WARNING": "yellow", "ERROR": "red", "CRITICAL": "red,bg_white"},
         secondary_log_colors={"asctime": {"": "blue"}},
         reset=True,
