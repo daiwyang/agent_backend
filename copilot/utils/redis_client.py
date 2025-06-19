@@ -50,6 +50,7 @@ class RedisClient:
                 return
 
             redis_config = conf.get("redis", {})
+            logger.debug(f"Redis config: {redis_config}")
 
             # 构建Redis URL
             host = redis_config.get("host", "localhost")
@@ -59,20 +60,25 @@ class RedisClient:
             max_connections = redis_config.get("max_connections", 20)
 
             url = f"redis://:{password}@{host}:{port}/{db}" if password else f"redis://{host}:{port}/{db}"
+            logger.debug(f"Redis connection URL: {url.split('@')[0]}****@{url.split('@')[1] if '@' in url else url}")
 
-            # 创建连接池
-            self._pool = ConnectionPool.from_url(
-                url, max_connections=max_connections, retry_on_timeout=True, socket_keepalive=True, socket_keepalive_options={}, decode_responses=True
-            )
+            try:
+                # 创建连接池
+                self._pool = ConnectionPool.from_url(
+                    url, max_connections=max_connections, retry_on_timeout=True, socket_keepalive=True, socket_keepalive_options={}, decode_responses=True
+                )
 
-            # 创建客户端
-            self._client = Redis(connection_pool=self._pool)
+                # 创建客户端
+                self._client = Redis(connection_pool=self._pool)
 
-            # 测试连接
-            await self._client.ping()
-            self._initialized = True
+                # 测试连接
+                await self._client.ping()
+                self._initialized = True
 
-            logger.info(f"Redis client initialized: {host}:{port}/{db} (pool size: {max_connections})")
+                logger.info(f"Redis client initialized: {host}:{port}/{db} (pool size: {max_connections})")
+            except Exception as e:
+                logger.error(f"Redis connection failed: {str(e)}")
+                raise
 
     async def close(self) -> None:
         """关闭Redis连接"""

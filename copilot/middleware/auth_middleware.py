@@ -29,7 +29,6 @@ class AuthenticationMiddleware:
             "/docs",  # API文档
             "/openapi.json",  # OpenAPI规范
             "/redoc",  # ReDoc文档
-            "/",  # 根路径
         ]
 
     async def authenticate_request(self, request: Request, call_next):
@@ -73,34 +72,42 @@ class AuthenticationMiddleware:
                 )
 
             try:
+                logger.debug(f"Verifying token: {token[:6]}...{token[-6:]}")
                 # 验证token
                 username = await self.user_service.verify_token(token)
+                logger.debug(f"Token verification result for {token[:6]}...{token[-6:]}: username={username}")
+
                 if username is None:
+                    logger.warning(f"Token verification failed for {token[:6]}...{token[-6:]}")
                     return JSONResponse(
-                        status_code=status.HTTP_401_UNAUTHORIZED, 
+                        status_code=status.HTTP_401_UNAUTHORIZED,
                         content={"code": 401, "message": "认证失败", "detail": "无效或过期的token"}
                     )
 
                 # 获取用户信息
+                logger.debug(f"Fetching user info for username: {username}")
                 user = await self.user_service.get_user_by_username(username)
                 if user is None:
+                    logger.warning(f"User not found for username: {username}")
                     return JSONResponse(
-                        status_code=status.HTTP_401_UNAUTHORIZED, 
+                        status_code=status.HTTP_401_UNAUTHORIZED,
                         content={"code": 401, "message": "用户不存在", "detail": "无法找到对应的用户信息"}
                     )
 
                 # 检查用户是否被禁用
                 if not user.get("is_active", True):
+                    logger.warning(f"User account disabled: {username}")
                     return JSONResponse(
-                        status_code=status.HTTP_403_FORBIDDEN, 
+                        status_code=status.HTTP_403_FORBIDDEN,
                         content={"code": 403, "message": "用户账户已被禁用", "detail": "请联系管理员激活账户"}
                     )
 
                 # 将用户信息添加到请求状态中，供后续处理使用
                 request.state.current_user = user
+                logger.debug(f"Authentication successful for user: {username}")
 
             except Exception as e:
-                logger.error(f"认证过程中发生错误: {str(e)}")
+                logger.error(f"Authentication error for token {token[:6]}...{token[-6:]}: {str(e)}", exc_info=True)
                 return JSONResponse(
                     status_code=status.HTTP_401_UNAUTHORIZED, 
                     content={"code": 401, "message": "认证验证失败", "detail": "无法验证用户身份"}
