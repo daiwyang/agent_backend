@@ -170,12 +170,13 @@ class UserSessionService:
             logger.error(f"Failed to get session {session_id}: {str(e)}")
             return None
 
-    async def update_session_last_active(self, session_id: str) -> bool:
+    async def update_session_last_active(self, session_id: str, auto_extend: bool = True) -> bool:
         """
         更新会话最后活跃时间
 
         Args:
             session_id: 会话ID
+            auto_extend: 是否自动延长会话过期时间，默认为True
 
         Returns:
             是否更新成功
@@ -191,13 +192,19 @@ class UserSessionService:
                 session_dict = json.loads(session_data)
                 session_dict["last_active"] = datetime.now(timezone.utc).isoformat()
 
-                # 获取剩余TTL并重新设置
-                ttl = await redis.ttl(session_key)
-                if ttl > 0:
-                    await redis.set(session_key, json.dumps(session_dict), ex=ttl)
-                    return True
-
-            return False
+                if auto_extend:
+                    # 自动延长会话过期时间到默认时长
+                    new_expire_time = self.default_session_expire
+                    session_dict["expires_at"] = (datetime.now(timezone.utc) + timedelta(seconds=new_expire_time)).isoformat()
+                    await redis.set(session_key, json.dumps(session_dict), ex=new_expire_time)
+                    logger.debug(f"Auto-extended session {session_id} to {new_expire_time} seconds")
+                else:
+                    # 获取剩余TTL并重新设置（原有逻辑）
+                    ttl = await redis.ttl(session_key)
+                    if ttl > 0:
+                        await redis.set(session_key, json.dumps(session_dict), ex=ttl)
+                
+                return True
 
         except Exception as e:
             logger.error(f"Failed to update session last active {session_id}: {str(e)}")
