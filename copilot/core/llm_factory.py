@@ -5,25 +5,13 @@ LLM 工厂模式 - 支持多个 LLM 提供商
 import os
 from typing import Any, Dict, Optional
 
+from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_deepseek import ChatDeepSeek
 from langchain_openai import ChatOpenAI
-from langchain_anthropic import ChatAnthropic
-from langchain_community.chat_models import ChatZhipuAI
-from langchain_google_genai import ChatGoogleGenerativeAI
 
-try:
-    from langchain_community.chat_models.moonshot import MoonshotChat
-except ImportError:
-    MoonshotChat = None
-
-try:
-    from langchain_community.chat_models.tongyi import ChatTongyi
-except ImportError:
-    ChatTongyi = None
-
-from copilot.utils.logger import logger
 from copilot.config.settings import conf
+from copilot.utils.logger import logger
 
 
 class LLMFactory:
@@ -49,18 +37,13 @@ class LLMFactory:
         providers_config = conf.get("llm", {}).get("providers", {})
         provider_config = providers_config.get(provider, {})
 
-        if not provider_config:
-            logger.warning(f"Provider {provider} not found in config, falling back to deepseek")
-            provider = "deepseek"
-            provider_config = providers_config.get("deepseek", {})
-
-        # 获取模型名称
-        if model is None:
-            model = provider_config.get("model", "gpt-3.5-turbo")
-
         # 获取API密钥
         api_key_env = provider_config.get("api_key_env")
         api_key = os.getenv(api_key_env) if api_key_env else None
+
+        # 获取模型名称，如果未指定则使用配置文件中的默认值
+        if model is None:
+            model = provider_config.get("model")
 
         # 基础参数
         base_params = {
@@ -86,14 +69,6 @@ class LLMFactory:
                 return cls._create_openai(**base_params)
             elif provider == "claude":
                 return cls._create_claude(**base_params)
-            elif provider == "moonshot":
-                return cls._create_moonshot(**base_params)
-            elif provider == "zhipu":
-                return cls._create_zhipu(**base_params)
-            elif provider == "qwen":
-                return cls._create_qwen(**base_params)
-            elif provider == "gemini":
-                return cls._create_gemini(**base_params)
             else:
                 logger.error(f"Unsupported provider: {provider}")
                 # 回退到deepseek
@@ -137,54 +112,6 @@ class LLMFactory:
         if not params.get("api_key"):
             raise ValueError("ANTHROPIC_API_KEY is required")
         return ChatAnthropic(**params)
-
-    @staticmethod
-    def _create_moonshot(**params) -> Any:
-        """创建Moonshot实例"""
-        if MoonshotChat is None:
-            raise ImportError("Moonshot chat model not available")
-        if not params.get("api_key"):
-            raise ValueError("MOONSHOT_API_KEY is required")
-
-        # Moonshot 可能需要特殊的参数处理
-        moonshot_params = params.copy()
-        if "base_url" in moonshot_params:
-            moonshot_params["moonshot_api_base"] = moonshot_params.pop("base_url")
-
-        return MoonshotChat(**moonshot_params)
-
-    @staticmethod
-    def _create_zhipu(**params) -> ChatZhipuAI:
-        """创建智谱AI实例"""
-        if not params.get("api_key"):
-            raise ValueError("ZHIPU_API_KEY is required")
-        return ChatZhipuAI(**params)
-
-    @staticmethod
-    def _create_qwen(**params) -> Any:
-        """创建通义千问实例"""
-        if ChatTongyi is None:
-            raise ImportError("Tongyi (Qwen) chat model not available")
-        if not params.get("api_key"):
-            raise ValueError("DASHSCOPE_API_KEY is required")
-
-        # 通义千问使用dashscope_api_key参数
-        qwen_params = params.copy()
-        qwen_params["dashscope_api_key"] = qwen_params.pop("api_key")
-
-        return ChatTongyi(**qwen_params)
-
-    @staticmethod
-    def _create_gemini(**params) -> ChatGoogleGenerativeAI:
-        """创建Gemini实例"""
-        if not params.get("api_key"):
-            raise ValueError("GOOGLE_API_KEY is required")
-
-        # Gemini 使用google_api_key参数
-        gemini_params = params.copy()
-        gemini_params["google_api_key"] = gemini_params.pop("api_key")
-
-        return ChatGoogleGenerativeAI(**gemini_params)
 
     @classmethod
     def get_available_providers(cls) -> Dict[str, bool]:
