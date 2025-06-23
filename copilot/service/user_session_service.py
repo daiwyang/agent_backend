@@ -92,23 +92,23 @@ class UserSessionService:
                 session_id = await redis.get(token_key)
                 if not session_id:
                     return False
-                
+
                 # 先获取会话数据以获取user_id
                 session_key = f"{self.session_prefix}{session_id}"
                 session_data = await redis.get(session_key)
-                
+
                 # 删除会话数据
                 await redis.delete(session_key)
-                
+
                 # 删除token映射
                 await redis.delete(token_key)
-                
+
                 # 从用户会话集合中移除
                 if session_data:
                     session_dict = json.loads(session_data)
                     user_sessions_key = f"{self.user_sessions_prefix}{session_dict['user_id']}"
                     await redis.srem(user_sessions_key, session_id)
-                
+
                 logger.info(f"Successfully deleted session {session_id} by token")
                 return True
         except Exception as e:
@@ -203,7 +203,7 @@ class UserSessionService:
                     ttl = await redis.ttl(session_key)
                     if ttl > 0:
                         await redis.set(session_key, json.dumps(session_dict), ex=ttl)
-                
+
                 return True
 
         except Exception as e:

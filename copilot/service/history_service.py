@@ -217,9 +217,6 @@ class ChatHistoryManager:
                 # 获取每个会话的消息
                 messages = await self.get_session_messages(session["session_id"])
 
-                # 判断会话的实际状态
-                actual_status = await self._get_session_actual_status(session["session_id"], session.get("status", "available"))
-
                 chat_session = ChatSession(
                     session_id=session["session_id"],
                     user_id=session["user_id"],
@@ -229,7 +226,7 @@ class ChatHistoryManager:
                     last_activity=session["last_activity"],
                     messages=messages,
                     context=session.get("context", {}),
-                    status=actual_status,
+                    status=session.get("status", "available"),
                 )
                 result.append(chat_session)
 
@@ -238,44 +235,6 @@ class ChatHistoryManager:
         except Exception as e:
             logger.error(f"Failed to get sessions for user {user_id}: {str(e)}")
             return []
-
-    async def archive_session(self, session_id: str):
-        """
-        归档会话（从Redis中移除，但保持数据库状态为available）
-        
-        Args:
-            session_id: 会话ID
-        """
-        try:
-            # 归档只是从Redis中移除，不改变数据库状态
-            from copilot.core.session_manager import session_manager
-            from copilot.utils.redis_client import get_redis
-            
-            async with get_redis() as redis:
-                # 从Redis中删除会话数据
-                session_key = f"{session_manager.redis_prefix}{session_id}"
-                await redis.delete(session_key)
-                
-                # 从用户会话列表中移除（需要知道user_id）
-                mongo_manager = await self._get_mongo_manager()
-                sessions_collection = await mongo_manager.get_collection(self.sessions_collection)
-                session_doc = await sessions_collection.find_one({"session_id": session_id})
-                
-                if session_doc:
-                    user_sessions_key = f"{session_manager.user_sessions_prefix}{session_doc['user_id']}"
-                    await redis.srem(user_sessions_key, session_id)
-                    
-                    # 可选：记录归档时间（但不改变status）
-                    await sessions_collection.update_one(
-                        {"session_id": session_id}, 
-                        {"$set": {"archived_at": datetime.now()}}
-                    )
-
-            logger.info(f"Archived session {session_id} (removed from Redis)")
-
-        except Exception as e:
-            logger.error(f"Failed to archive session {session_id}: {str(e)}")
-            raise
 
     async def delete_session(self, session_id: str, hard_delete: bool = False):
         """
@@ -444,108 +403,6 @@ class ChatHistoryManager:
         except Exception as e:
             logger.error(f"Failed to get stats: {str(e)}")
             return {}
-
-    async def reactivate_session(self, session_id: str):
-        """
-        重新激活会话（将非活跃会话重新加载到Redis）
-
-        Args:
-            session_id: 会话ID
-
-        Returns:
-            bool: 是否成功激活
-        """
-        try:
-            mongo_manager = await self._get_mongo_manager()
-            sessions_collection = await mongo_manager.get_collection(self.sessions_collection)
-
-            # 只能激活available状态的会话
-            session_doc = await sessions_collection.find_one({
-                "session_id": session_id, 
-                "status": "available"
-            })
-
-            if not session_doc:
-                logger.warning(f"Session {session_id} not found or not available for reactivation")
-                return False
-
-            # 检查是否已经在Redis中（避免重复操作）
-            from copilot.core.session_manager import SessionInfo, session_manager
-            existing_session = await session_manager.get_session(session_id)
-            if existing_session:
-                logger.info(f"Session {session_id} is already active")
-                return True
-
-            # 重建SessionInfo并加载到Redis
-            from copilot.utils.redis_client import get_redis
-            
-            session_info = SessionInfo(
-                session_id=session_doc["session_id"],
-                user_id=session_doc["user_id"],
-                window_id=session_doc["window_id"],
-                created_at=session_doc["created_at"],
-                last_activity=datetime.now(),  # 更新为当前时间
-                context=session_doc.get("context", {}),
-                thread_id=session_doc["thread_id"],
-            )
-
-            # 保存到Redis
-            async with get_redis() as redis:
-                session_key = f"{session_manager.redis_prefix}{session_id}"
-                session_data = session_manager._serialize_session(session_info)
-                await redis.set(session_key, session_data, ex=session_manager.session_timeout)
-
-                # 添加到用户会话列表
-                user_sessions_key = f"{session_manager.user_sessions_prefix}{session_info.user_id}"
-                await redis.sadd(user_sessions_key, session_id)
-                await redis.expire(user_sessions_key, session_manager.session_timeout)
-
-            # 更新数据库中的最后活动时间
-            await sessions_collection.update_one(
-                {"session_id": session_id},
-                {
-                    "$set": {
-                        "last_activity": datetime.now(),
-                        "reactivated_at": datetime.now()
-                    }
-                }
-            )
-            
-            logger.info(f"Successfully reactivated session {session_id}")
-            return True
-
-        except Exception as e:
-            logger.error(f"Failed to reactivate session {session_id}: {str(e)}")
-            raise
-
-    async def _get_session_actual_status(self, session_id: str, db_status: str) -> str:
-        """
-        获取会话的实际状态（结合Redis和MongoDB）
-        
-        Args:
-            session_id: 会话ID
-            db_status: 数据库中的状态
-            
-        Returns:
-            str: 实际状态 (active, inactive, deleted)
-        """
-        try:
-            # 如果数据库中标记为删除，直接返回deleted
-            if db_status == "deleted":
-                return "deleted"
-            
-            # 检查Redis中是否存在
-            from copilot.core.session_manager import session_manager
-            session_info = await session_manager.get_session(session_id)
-            
-            if session_info:
-                return "active"  # Redis中存在 = 活跃
-            else:
-                return "inactive"  # Redis中不存在但数据库中可用 = 非活跃（可恢复）
-                
-        except Exception as e:
-            logger.error(f"Failed to get actual status for session {session_id}: {str(e)}")
-            return "inactive"
 
 
 # 全局聊天历史管理器实例
