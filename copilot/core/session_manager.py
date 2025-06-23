@@ -132,7 +132,7 @@ class SessionManager:
             from copilot.utils.mongo_client import MongoClient
 
             async with MongoClient() as mongo:
-                session_doc = await mongo.find_one("chat_sessions", {"session_id": session_id, "status": {"$in": ["active", "archived"]}})
+                session_doc = await mongo.find_one("chat_sessions", {"session_id": session_id, "status": "available"})
 
                 if not session_doc:
                     return None

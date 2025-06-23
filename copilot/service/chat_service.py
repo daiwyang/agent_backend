@@ -233,6 +233,10 @@ class ChatService:
         """更新会话上下文"""
         await session_manager.update_session_context(session_id, context)
 
+    async def reactivate_session(self, session_id: str) -> bool:
+        """重新激活会话"""
+        return await self.chat_history_manager.reactivate_session(session_id)
+
     # 历史记录方法
     async def get_chat_history(self, session_id: str) -> List[ChatMessage]:
         """获取聊天历史(先查Redis，查不到再从MongoDB获取)"""

@@ -16,9 +16,11 @@ from copilot.model.chat_model import (
     ChatResponse,
     CreateSessionRequestWithAuth,
     CreateSessionResponse,
+    ReactivateSessionResponse,
     SearchRequest,
     SearchResult,
     SessionInfo,
+    SessionStatusResponse,
 )
 
 # 导入简化的服务
@@ -306,3 +308,149 @@ async def delete_session(session_id: str, archive: bool = Query(True, descriptio
 async def health_check():
     """健康检查"""
     return {"status": "healthy", "timestamp": datetime.now()}
+
+
+@router.patch("/sessions/{session_id}/reactivate", response_model=ReactivateSessionResponse)
+async def reactivate_session(session_id: str, current_user: dict = Depends(get_current_user_from_state)):
+    """重新激活会话（将归档或已删除的会话转为活跃状态）"""
+    try:
+        # 验证用户权限
+        user_id = current_user.get("user_id")
+        if not user_id:
+            raise_validation_error("用户ID缺失")
+
+        # 首先验证会话是否属于当前用户（从数据库查询）
+        from copilot.utils.mongo_client import get_mongo_manager
+        mongo_manager = await get_mongo_manager()
+        sessions_collection = await mongo_manager.get_collection("chat_sessions")
+        
+        session_doc = await sessions_collection.find_one({
+            "session_id": session_id,
+            "user_id": user_id
+        })
+        
+        if not session_doc:
+            raise HTTPException(status_code=404, detail="会话不存在或无权访问")
+        
+        db_status = session_doc.get("status", "available")
+        if db_status == "deleted":
+            raise HTTPException(status_code=400, detail="已删除的会话无法重新激活")
+        
+        # 检查是否已经在Redis中活跃
+        session_info = await session_manager.get_session(session_id)
+        if session_info:
+            return {"message": "会话已经是活跃状态", "session_id": session_id, "status": "active"}
+
+        # 重新激活会话
+        success = await chat_service.reactivate_session(session_id)
+        
+        if success:
+            return {
+                "message": "会话已成功重新激活",
+                "session_id": session_id,
+                "status": "active",
+                "reactivated_at": datetime.now().isoformat()
+            }
+        else:
+            raise HTTPException(status_code=400, detail="会话重新激活失败")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise ErrorHandler.handle_system_error(e, "重新激活会话")
+
+
+@router.get("/sessions/{session_id}/status", response_model=SessionStatusResponse)
+async def get_session_status(session_id: str, current_user: dict = Depends(get_current_user_from_state)):
+    """获取会话状态信息"""
+    try:
+        # 验证用户权限
+        user_id = current_user.get("user_id")
+        if not user_id:
+            raise_validation_error("用户ID缺失")
+
+        # 从数据库查询会话状态
+        from copilot.utils.mongo_client import get_mongo_manager
+        mongo_manager = await get_mongo_manager()
+        sessions_collection = await mongo_manager.get_collection("chat_sessions")
+        
+        session_doc = await sessions_collection.find_one({
+            "session_id": session_id,
+            "user_id": user_id
+        })
+        
+        if not session_doc:
+            raise HTTPException(status_code=404, detail="会话不存在或无权访问")
+
+        # 检查是否在Redis中存在（即是否真正活跃）
+        session_info = await session_manager.get_session(session_id)
+        is_active_in_redis = session_info is not None
+        
+        # 确定实际状态
+        db_status = session_doc.get("status", "available")
+        if db_status == "deleted":
+            actual_status = "deleted"
+        elif is_active_in_redis:
+            actual_status = "active"
+        else:
+            actual_status = "inactive"
+
+        return {
+            "session_id": session_id,
+            "user_id": session_doc["user_id"],
+            "window_id": session_doc["window_id"], 
+            "status": actual_status,  # 实际状态
+            "db_status": db_status,   # 数据库状态
+            "created_at": session_doc["created_at"].isoformat(),
+            "last_activity": session_doc["last_activity"].isoformat(),
+            "is_active_in_redis": is_active_in_redis,
+            "archived_at": session_doc.get("archived_at").isoformat() if session_doc.get("archived_at") else None,
+            "deleted_at": session_doc.get("deleted_at").isoformat() if session_doc.get("deleted_at") else None,
+            "reactivated_at": session_doc.get("reactivated_at").isoformat() if session_doc.get("reactivated_at") else None
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise ErrorHandler.handle_system_error(e, "获取会话状态")
+
+
+@router.post("/sessions/{session_id}/archive")
+async def archive_session(session_id: str, current_user: dict = Depends(get_current_user_from_state)):
+    """归档会话（从Redis中移除，但保持可恢复状态）"""
+    try:
+        # 验证用户权限
+        user_id = current_user.get("user_id")
+        if not user_id:
+            raise_validation_error("用户ID缺失")
+
+        # 验证会话是否属于当前用户
+        from copilot.utils.mongo_client import get_mongo_manager
+        mongo_manager = await get_mongo_manager()
+        sessions_collection = await mongo_manager.get_collection("chat_sessions")
+        
+        session_doc = await sessions_collection.find_one({
+            "session_id": session_id,
+            "user_id": user_id
+        })
+        
+        if not session_doc:
+            raise HTTPException(status_code=404, detail="会话不存在或无权访问")
+        
+        if session_doc.get("status") == "deleted":
+            raise HTTPException(status_code=400, detail="已删除的会话无法归档")
+
+        # 归档会话
+        await chat_service.chat_history_manager.archive_session(session_id)
+        
+        return {
+            "message": "会话已成功归档",
+            "session_id": session_id,
+            "status": "inactive",
+            "archived_at": datetime.now().isoformat()
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise ErrorHandler.handle_system_error(e, "归档会话")

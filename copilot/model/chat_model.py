@@ -82,3 +82,26 @@ class SearchResult(BaseModel):
 
 class CreateSessionRequestWithAuth(BaseModel):
     window_id: Optional[str] = None
+
+
+class SessionStatusResponse(BaseModel):
+    """会话状态响应模型"""
+    session_id: str
+    user_id: str
+    window_id: str
+    status: str  # active, inactive, deleted (实际状态)
+    db_status: str  # available, deleted (数据库状态)
+    created_at: str
+    last_activity: str
+    is_active_in_redis: bool
+    archived_at: Optional[str] = None
+    deleted_at: Optional[str] = None
+    reactivated_at: Optional[str] = None
+
+
+class ReactivateSessionResponse(BaseModel):
+    """重新激活会话响应模型"""
+    message: str
+    session_id: str
+    status: str
+    reactivated_at: Optional[str] = None
