@@ -38,6 +38,7 @@ class SessionInfo(BaseModel):
 
 
 class ChatMessage(BaseModel):
+    message_id: Optional[str] = None  # MongoDB的_id字段转换而来
     role: str
     content: str
     timestamp: Optional[str] = None

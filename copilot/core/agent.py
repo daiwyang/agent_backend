@@ -10,6 +10,7 @@ from langgraph.prebuilt import create_react_agent
 
 from copilot.core.llm_factory import LLMFactory
 from copilot.utils.logger import logger
+from copilot.utils.token_calculator import TokenCalculator, TokenUsage
 
 
 class CoreAgent:
@@ -109,32 +110,6 @@ class CoreAgent:
         except Exception as e:
             logger.error(f"Failed to switch provider: {str(e)}")
             return False
-
-    async def chat(self, thread_id: str, message: str) -> str:
-        """
-        简单聊天接口
-
-        Args:
-            thread_id: 线程ID
-            message: 用户消息
-
-        Returns:
-            str: 助手回复
-        """
-        config = {"configurable": {"thread_id": thread_id}}
-        inputs = {"messages": [{"role": "user", "content": message}]}
-
-        try:
-            for chunk in self.graph.stream(inputs, config=config, stream_mode="updates"):
-                if "agent" in chunk:
-                    for msg in chunk["agent"]["messages"]:
-                        if msg.content:
-                            return str(msg.content)
-        except Exception as e:
-            logger.error(f"Error in chat: {str(e)}")
-            return "抱歉，处理您的请求时出现了错误。"
-
-        return "未能获取到回复。"
 
     async def chat_stream(self, thread_id: str, message: str) -> AsyncGenerator[str, None]:
         """
@@ -319,3 +294,32 @@ class CoreAgent:
         else:
             # 不支持多模态的提供商
             yield f"当前使用的 {self.provider} 提供商暂不支持图片分析功能。"
+
+    def _estimate_token_usage(self, prompt: str, completion: str) -> Dict[str, int]:
+        """
+        估算token使用量
+        
+        Args:
+            prompt: 用户输入
+            completion: 模型回复
+            
+        Returns:
+            Dict[str, int]: token使用量统计
+        """
+        try:
+            # 获取当前模型的key
+            model_key = TokenCalculator.get_model_key(self.provider, self.model_name)
+            
+            # 计算token使用量
+            usage = TokenCalculator.calculate_usage(prompt, completion, model_key)
+            
+            return usage.to_dict()
+            
+        except Exception as e:
+            logger.warning(f"Token estimation failed: {str(e)}")
+            # 返回默认值，避免系统崩溃
+            return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    
+    def get_token_calculator(self) -> TokenCalculator:
+        """获取token计算器实例"""
+        return TokenCalculator()

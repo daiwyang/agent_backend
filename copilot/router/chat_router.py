@@ -199,7 +199,14 @@ async def get_chat_history(
 
         return ChatHistoryResponse(
             session_id=session_id,
-            messages=[ChatMessage(role=msg.role, content=msg.content, timestamp=msg.timestamp) for msg in paginated_messages],
+            messages=[
+                ChatMessage(
+                    message_id=msg.message_id,
+                    role=msg.role, 
+                    content=msg.content, 
+                    timestamp=msg.timestamp
+                ) for msg in paginated_messages
+            ],
             total_count=total_count,
         )
     except Exception as e:
@@ -327,6 +334,35 @@ async def delete_session(session_id: str, archive: bool = Query(True, descriptio
         return {"message": f"Session deleted successfully (archived: {archive})"}
     except Exception as e:
         raise ErrorHandler.handle_system_error(e, "删除会话")
+
+
+@router.get("/messages/{message_id}")
+async def get_message_by_id(message_id: str, current_user: dict = Depends(get_current_user_from_state)):
+    """根据消息ID获取具体的消息记录"""
+    try:
+        user_id = current_user.get("user_id")
+        if not user_id:
+            raise_validation_error("用户ID缺失")
+
+        # 获取消息详情
+        message = await chat_service.get_message_by_id(message_id, user_id)
+        
+        if not message:
+            raise_validation_error("消息不存在或无权限访问")
+        
+        return {
+            "message_id": message_id,
+            "session_id": message.get("session_id"),
+            "role": message.get("role"),
+            "content": message.get("content"),
+            "timestamp": message.get("timestamp"),
+            "metadata": message.get("metadata", {})
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise_system_error(f"获取消息失败: {str(e)}")
 
 
 @router.get("/health")
