@@ -126,10 +126,15 @@ class ChatService:
                 token_usage = self.core_agent._estimate_token_usage(message, full_response)
 
                 # 保存完整对话到数据库，包含token信息
-                await self._save_conversation(session_id, message, full_response, token_usage)
+                message_ids = await self._save_conversation(session_id, message, full_response, token_usage)
 
-                # 返回最终的token统计
-                yield {"finished": True, "token_usage": token_usage, "total_tokens": token_usage.get("total_tokens", 0)}
+                # 返回最终的token统计和message_id
+                yield {
+                    "finished": True, 
+                    "token_usage": token_usage, 
+                    "total_tokens": token_usage.get("total_tokens", 0),
+                    "message_ids": message_ids
+                }
 
             # 更新会话活动时间
             await session_manager.get_session(session_id)
@@ -167,12 +172,40 @@ class ChatService:
 
         # 保存消息到数据库（包含附件信息）
         token_usage = self.core_agent._estimate_token_usage(message, response_content)
-        await self._save_conversation(session_id, message, response_content, token_usage, attachments)
+        message_ids = await self._save_conversation(session_id, message, response_content, token_usage, attachments)
 
         # 更新会话活动时间
         await session_manager.get_session(session_id)
 
-        response_message = ChatMessage(role="assistant", content=response_content)
+        response_message = ChatMessage(role="assistant", content=response_content, message_id=message_ids.get("assistant_message_id"))
+        return ChatResponse(session_id=session_id, messages=[response_message], context=session_info.context)
+
+    async def chat(self, session_id: str, message: str) -> ChatResponse:
+        """
+        常规聊天接口（非流式）
+
+        Args:
+            session_id: 会话ID
+            message: 用户消息
+
+        Returns:
+            ChatResponse: 聊天响应，包含message_id
+        """
+        session_info = await session_manager.get_session(session_id)
+        if not session_info:
+            raise ValueError(f"Session {session_id} not found or expired")
+
+        # 使用核心Agent进行聊天
+        response_content = await self.core_agent.chat(session_info.thread_id, message)
+
+        # 保存消息到数据库
+        token_usage = self.core_agent._estimate_token_usage(message, response_content)
+        message_ids = await self._save_conversation(session_id, message, response_content, token_usage)
+
+        # 更新会话活动时间
+        await session_manager.get_session(session_id)
+
+        response_message = ChatMessage(role="assistant", content=response_content, message_id=message_ids.get("assistant_message_id"))
         return ChatResponse(session_id=session_id, messages=[response_message], context=session_info.context)
 
     async def _save_conversation(
@@ -187,6 +220,9 @@ class ChatService:
             assistant_message: 助手回复
             token_usage: token使用量统计
             attachments: 附件列表（可选，用于多模态）
+            
+        Returns:
+            Dict[str, str]: 包含用户消息和助手消息的message_id
         """
         try:
             timestamp = datetime.now().isoformat()
@@ -204,7 +240,7 @@ class ChatService:
             if attachments:
                 user_metadata.update({"attachments": attachments, "is_multimodal": True})
 
-            await self.chat_history_manager.save_message(session_id=session_id, role="user", content=user_message, metadata=user_metadata)
+            user_message_id = await self.chat_history_manager.save_message(session_id=session_id, role="user", content=user_message, metadata=user_metadata)
 
             # 保存助手消息
             assistant_metadata = {
@@ -218,26 +254,33 @@ class ChatService:
             if attachments:
                 assistant_metadata["is_multimodal_response"] = True
 
-            await self.chat_history_manager.save_message(
+            assistant_message_id = await self.chat_history_manager.save_message(
                 session_id=session_id, role="assistant", content=assistant_message, metadata=assistant_metadata
             )
 
             logger.debug(f"Saved conversation with token usage: {usage.to_dict()}")
+            
+            # 返回message_id
+            return {
+                "user_message_id": user_message_id,
+                "assistant_message_id": assistant_message_id
+            }
 
         except Exception as e:
             logger.warning(f"Failed to save conversation to database: {str(e)}")
+            raise
 
     async def _save_messages(self, session_id: str, user_message: str, assistant_message: str, token_usage: Dict[str, int] = None):
         """保存消息到数据库，包含 token 统计信息"""
         # 调用统一的保存方法，保持向后兼容
-        await self._save_conversation(session_id, user_message, assistant_message, token_usage)
+        return await self._save_conversation(session_id, user_message, assistant_message, token_usage)
 
     async def _save_multimodal_messages(
         self, session_id: str, user_message: str, assistant_message: str, attachments: List[dict] = None, token_usage: Dict[str, int] = None
     ):
         """保存多模态消息，包含附件信息和token统计"""
         # 调用统一的保存方法，保持向后兼容
-        await self._save_conversation(session_id, user_message, assistant_message, token_usage, attachments)
+        return await self._save_conversation(session_id, user_message, assistant_message, token_usage, attachments)
 
     # 会话管理方法
     async def get_user_sessions(self, user_id: str) -> List[SessionInfo]:

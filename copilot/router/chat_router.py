@@ -117,6 +117,7 @@ async def chat(request: ChatRequest, current_user: dict = Depends(get_current_us
 
             response_content = ""
             content_buffer = ""  # 用于缓冲小块内容
+            message_ids = None  # 存储消息ID
 
             async for chunk in chat_service.chat_stream(request.session_id, request.message):
                 if "error" in chunk:
@@ -135,6 +136,9 @@ async def chat(request: ChatRequest, current_user: dict = Depends(get_current_us
 
                         # 确保数据立即发送
                         await asyncio.sleep(0)
+                elif "finished" in chunk and chunk["finished"]:
+                    # 获取消息ID
+                    message_ids = chunk.get("message_ids", {})
 
             # 发送剩余的缓冲内容
             if content_buffer:
@@ -143,9 +147,16 @@ async def chat(request: ChatRequest, current_user: dict = Depends(get_current_us
 
             # 消息保存已在session_service中处理
 
-            # 发送结束事件
-            end_data = json.dumps({"type": "end", "session_id": request.session_id}) + "\n"
-            yield end_data.encode("utf-8")
+            # 发送结束事件，包含message_id
+            end_data = {
+                "type": "end", 
+                "session_id": request.session_id
+            }
+            if message_ids:
+                end_data["message_ids"] = message_ids
+            
+            end_data_json = json.dumps(end_data) + "\n"
+            yield end_data_json.encode("utf-8")
 
         except ValueError as e:
             error_data = json.dumps({"type": "error", "content": str(e)}) + "\n"

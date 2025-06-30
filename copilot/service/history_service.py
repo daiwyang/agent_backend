@@ -120,6 +120,9 @@ class ChatHistoryManager:
                 logger.warning(f"Failed to save message to Redis for session {session_id}: {str(redis_error)}")
                 # Redis 写入失败不影响主流程，因为 MongoDB 已经成功
 
+            # 返回生成的消息ID
+            return message_id
+
         except Exception as e:
             logger.error(f"Failed to save message for session {session_id}: {str(e)}")
             raise

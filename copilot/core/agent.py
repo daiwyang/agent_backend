@@ -2,7 +2,6 @@
 核心Agent - 支持多个LLM提供商
 """
 
-import os
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from langgraph.checkpoint.memory import MemorySaver
@@ -10,7 +9,7 @@ from langgraph.prebuilt import create_react_agent
 
 from copilot.core.llm_factory import LLMFactory
 from copilot.utils.logger import logger
-from copilot.utils.token_calculator import TokenCalculator, TokenUsage
+from copilot.utils.token_calculator import TokenCalculator
 
 
 class CoreAgent:
@@ -19,7 +18,7 @@ class CoreAgent:
     def __init__(self, provider: Optional[str] = None, model_name: Optional[str] = None, tools: List = None, **llm_kwargs):
         """
         初始化Agent
-        
+
         Args:
             provider: LLM提供商 (deepseek, openai, claude, moonshot, zhipu, qwen, gemini)
             model_name: 模型名称
@@ -34,11 +33,7 @@ class CoreAgent:
 
         # 初始化LLM
         try:
-            self.llm = LLMFactory.create_llm(
-                provider=provider,
-                model=model_name,
-                **llm_kwargs
-            )
+            self.llm = LLMFactory.create_llm(provider=provider, model=model_name, **llm_kwargs)
             logger.info(f"CoreAgent initialized with provider: {provider or 'default'}, model: {model_name or 'default'}")
         except Exception as e:
             logger.error(f"Failed to initialize LLM: {str(e)}")
@@ -46,34 +41,27 @@ class CoreAgent:
 
         # 创建LangGraph agent
         self.graph = create_react_agent(
-            self.llm, 
-            tools=self.tools, 
-            prompt="You are a helpful assistant. Please respond in Chinese.", 
-            checkpointer=self.memory
+            self.llm, tools=self.tools, prompt="You are a helpful assistant. Please respond in Chinese.", checkpointer=self.memory
         )
 
     def get_provider_info(self) -> Dict[str, Any]:
         """
         获取当前使用的提供商信息
-        
+
         Returns:
             Dict[str, Any]: 提供商信息
         """
-        return {
-            "provider": self.provider,
-            "model": self.model_name,
-            "available_providers": LLMFactory.get_available_providers()
-        }
+        return {"provider": self.provider, "model": self.model_name, "available_providers": LLMFactory.get_available_providers()}
 
     def switch_provider(self, provider: str, model_name: Optional[str] = None, **llm_kwargs) -> bool:
         """
         切换LLM提供商
-        
+
         Args:
             provider: 新的提供商
             model_name: 新的模型名称
             **llm_kwargs: 传递给LLM的额外参数
-            
+
         Returns:
             bool: 是否切换成功
         """
@@ -82,31 +70,24 @@ class CoreAgent:
             if not LLMFactory.validate_provider(provider):
                 logger.error(f"Provider {provider} is not available (missing API key)")
                 return False
-                
+
             # 创建新的LLM实例
-            new_llm = LLMFactory.create_llm(
-                provider=provider,
-                model=model_name,
-                **llm_kwargs
-            )
-            
+            new_llm = LLMFactory.create_llm(provider=provider, model=model_name, **llm_kwargs)
+
             # 更新实例变量
             self.provider = provider
             self.model_name = model_name
             self.llm_kwargs = llm_kwargs
             self.llm = new_llm
-            
+
             # 重新创建agent
             self.graph = create_react_agent(
-                self.llm,
-                tools=self.tools,
-                prompt="You are a helpful assistant. Please respond in Chinese.",
-                checkpointer=self.memory
+                self.llm, tools=self.tools, prompt="You are a helpful assistant. Please respond in Chinese.", checkpointer=self.memory
             )
-            
+
             logger.info(f"Successfully switched to provider: {provider}, model: {model_name}")
             return True
-            
+
         except Exception as e:
             logger.error(f"Failed to switch provider: {str(e)}")
             return False
@@ -114,11 +95,11 @@ class CoreAgent:
     async def chat_stream(self, thread_id: str, message: str) -> AsyncGenerator[str, None]:
         """
         流式聊天接口
-        
+
         Args:
             thread_id: 线程ID
             message: 用户消息
-            
+
         Yields:
             str: 响应片段
         """
@@ -203,48 +184,42 @@ class CoreAgent:
         """
         try:
             # 根据当前提供商处理多模态输入
-            if self.provider == 'openai':
+            if self.provider == "openai":
                 # GPT-4V 支持
-                messages = [{
-                    "role": "user", 
-                    "content": [{"type": "text", "text": input_data["text"]}] + input_data.get("images", [])
-                }]
-                
+                messages = [{"role": "user", "content": [{"type": "text", "text": input_data["text"]}] + input_data.get("images", [])}]
+
                 # 使用当前的LLM实例进行推理
                 config = {"configurable": {"thread_id": input_data["thread_id"]}}
                 inputs = {"messages": messages}
-                
+
                 for chunk in self.graph.stream(inputs, config=config, stream_mode="updates"):
                     if "agent" in chunk:
                         for msg in chunk["agent"]["messages"]:
                             if msg.content:
                                 return str(msg.content)
-                                
-            elif self.provider == 'claude':
+
+            elif self.provider == "claude":
                 # Claude-3 支持
-                messages = [{
-                    "role": "user",
-                    "content": [{"type": "text", "text": input_data["text"]}] + input_data.get("images", [])
-                }]
-                
+                messages = [{"role": "user", "content": [{"type": "text", "text": input_data["text"]}] + input_data.get("images", [])}]
+
                 config = {"configurable": {"thread_id": input_data["thread_id"]}}
                 inputs = {"messages": messages}
-                
+
                 for chunk in self.graph.stream(inputs, config=config, stream_mode="updates"):
                     if "agent" in chunk:
                         for msg in chunk["agent"]["messages"]:
                             if msg.content:
                                 return str(msg.content)
-                                
-            elif self.provider == 'gemini':
+
+            elif self.provider == "gemini":
                 # Gemini Pro Vision 支持
                 # Google 格式可能需要特殊处理
                 return f"我看到了您提供的图片。{input_data['text']} (Gemini 多模态处理)"
-                
+
             else:
                 # 其他提供商暂不支持多模态
                 return f"当前使用的 {self.provider} 提供商暂不支持图片分析功能。您的消息：{input_data['text']}"
-                
+
         except Exception as e:
             logger.error(f"Error in multimodal processing: {str(e)}")
             return f"处理多模态输入时出现错误：{str(e)}"
@@ -277,8 +252,8 @@ class CoreAgent:
         inputs = {"messages": [{"role": "user", "content": content}]}
 
         # 检查当前提供商是否支持多模态
-        multimodal_providers = ['openai', 'claude', 'gemini']
-        
+        multimodal_providers = ["openai", "claude", "gemini"]
+
         if self.provider in multimodal_providers:
             # 使用真正的多模态流式输出
             try:
@@ -298,28 +273,28 @@ class CoreAgent:
     def _estimate_token_usage(self, prompt: str, completion: str) -> Dict[str, int]:
         """
         估算token使用量
-        
+
         Args:
             prompt: 用户输入
             completion: 模型回复
-            
+
         Returns:
             Dict[str, int]: token使用量统计
         """
         try:
             # 获取当前模型的key
             model_key = TokenCalculator.get_model_key(self.provider, self.model_name)
-            
+
             # 计算token使用量
             usage = TokenCalculator.calculate_usage(prompt, completion, model_key)
-            
+
             return usage.to_dict()
-            
+
         except Exception as e:
             logger.warning(f"Token estimation failed: {str(e)}")
             # 返回默认值，避免系统崩溃
             return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-    
+
     def get_token_calculator(self) -> TokenCalculator:
         """获取token计算器实例"""
         return TokenCalculator()
