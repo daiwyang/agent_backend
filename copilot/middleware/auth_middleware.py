@@ -9,16 +9,17 @@ from copilot.utils.logger import logger
 
 class AuthenticationMiddleware:
     """认证中间件类"""
-    
+
     def __init__(self):
         self.user_service = UserService()
-        
+
         # 定义需要认证的路径前缀
         self.protected_paths = [
             "/agent_backend/chat",  # 聊天相关接口需要认证
             "/agent_backend/user/profile",  # 用户信息管理需要认证
             "/agent_backend/user/update",  # 用户信息更新需要认证
             "/agent_backend/user/me",  # 获取当前用户信息需要认证
+            "/agent_backend/mcp",  # 用户登出需要认证
         ]
 
         # 定义公开路径（不需要认证）
@@ -67,8 +68,7 @@ class AuthenticationMiddleware:
 
             if not token:
                 return JSONResponse(
-                    status_code=status.HTTP_401_UNAUTHORIZED, 
-                    content={"code": 401, "message": "无效的认证信息", "detail": "无法获取有效的token"}
+                    status_code=status.HTTP_401_UNAUTHORIZED, content={"code": 401, "message": "无效的认证信息", "detail": "无法获取有效的token"}
                 )
 
             try:
@@ -80,17 +80,15 @@ class AuthenticationMiddleware:
                 if session_data is None:
                     logger.warning(f"Token verification failed for {token[:6]}...{token[-6:]}")
                     return JSONResponse(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        content={"code": 401, "message": "认证失败", "detail": "无效或过期的token"}
+                        status_code=status.HTTP_401_UNAUTHORIZED, content={"code": 401, "message": "认证失败", "detail": "无效或过期的token"}
                     )
 
                 # 从会话数据中获取用户名
-                username = session_data.get('username')
+                username = session_data.get("username")
                 if not username:
                     logger.warning(f"No username found in session data: {session_data}")
                     return JSONResponse(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        content={"code": 401, "message": "会话数据无效", "detail": "无法获取用户名信息"}
+                        status_code=status.HTTP_401_UNAUTHORIZED, content={"code": 401, "message": "会话数据无效", "detail": "无法获取用户名信息"}
                     )
 
                 # 获取用户信息
@@ -99,16 +97,14 @@ class AuthenticationMiddleware:
                 if user is None:
                     logger.warning(f"User not found for username: {username}")
                     return JSONResponse(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        content={"code": 401, "message": "用户不存在", "detail": "无法找到对应的用户信息"}
+                        status_code=status.HTTP_401_UNAUTHORIZED, content={"code": 401, "message": "用户不存在", "detail": "无法找到对应的用户信息"}
                     )
 
                 # 检查用户是否被禁用
                 if not user.get("is_active", True):
                     logger.warning(f"User account disabled: {username}")
                     return JSONResponse(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        content={"code": 403, "message": "用户账户已被禁用", "detail": "请联系管理员激活账户"}
+                        status_code=status.HTTP_403_FORBIDDEN, content={"code": 403, "message": "用户账户已被禁用", "detail": "请联系管理员激活账户"}
                     )
 
                 # 将用户信息和会话信息添加到请求状态中，供后续处理使用
@@ -119,8 +115,7 @@ class AuthenticationMiddleware:
             except Exception as e:
                 logger.error(f"Authentication error for token {token[:6]}...{token[-6:]}: {str(e)}", exc_info=True)
                 return JSONResponse(
-                    status_code=status.HTTP_401_UNAUTHORIZED, 
-                    content={"code": 401, "message": "认证验证失败", "detail": "无法验证用户身份"}
+                    status_code=status.HTTP_401_UNAUTHORIZED, content={"code": 401, "message": "认证验证失败", "detail": "无法验证用户身份"}
                 )
 
         return await call_next(request)

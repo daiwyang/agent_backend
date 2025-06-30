@@ -70,8 +70,8 @@ class CoreAgent:
         for tool_info in available_tools:
             # 创建工具函数
             async def mcp_tool_func(session_id: str, **kwargs):
-                return await mcp_server_manager.call_tool_with_permission(
-                    session_id=session_id, tool_name=tool_info["tool_key"], parameters=kwargs, require_permission=True
+                return await mcp_server_manager.call_tool(
+                    tool_name=tool_info["full_name"], parameters=kwargs, session_id=session_id, require_permission=True
                 )
 
             # 这里需要创建LangChain工具包装器

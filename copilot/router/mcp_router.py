@@ -2,7 +2,7 @@
 MCP工具权限管理API路由
 """
 
-from typing import List
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -10,7 +10,6 @@ from pydantic import BaseModel
 from copilot.mcp.mcp_server_manager import mcp_server_manager
 from copilot.mcp.tool_permission_manager import tool_permission_manager
 from copilot.utils.auth import get_current_user_from_state
-from copilot.utils.error_codes import raise_validation_error
 
 router = APIRouter(prefix="/mcp")
 
@@ -23,13 +22,31 @@ class ToolPermissionRequest(BaseModel):
 
 
 class MCPServerConfig(BaseModel):
-    """MCP服务器配置模型"""
+    """MCP服务器配置模型 - 符合 FastMCP 标准"""
 
     id: str
     name: str
-    command: List[str]
-    env: dict = {}
+
+    # 1. HTTP/SSE 服务器
+    url: Optional[str] = None
+    auth: Optional[str] = None  # Bearer Token 或 "oauth"
+    headers: Dict[str, str] = {}  # 自定义头部（如 X-API-Key）
+
+    # 2. 本地 Python/Node.js 脚本（自动传输推理）
+    script: Optional[str] = None  # .py 或 .js 文件路径
+
+    # 3. Stdio 服务器
+    command: Optional[str] = None
     args: List[str] = []
+    env: Dict[str, str] = {}
+    cwd: Optional[str] = None
+
+    # 4. 完整的 MCP 配置
+    transport: Optional[str] = None  # stdio|http|sse
+    timeout: Optional[float] = 30.0
+
+    # 5. 工具风险级别配置（可选）
+    tool_risks: Dict[str, str] = {}  # {"tool_name": "low|medium|high"}
 
 
 @router.get("/tools")
@@ -46,7 +63,7 @@ async def get_available_tools(current_user: dict = Depends(get_current_user_from
 async def get_connected_servers(current_user: dict = Depends(get_current_user_from_state)):
     """获取已连接的MCP服务器"""
     try:
-        servers = mcp_server_manager.get_connected_servers()
+        servers = mcp_server_manager.get_servers_info()
         return {"success": True, "servers": servers}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取服务器列表失败: {str(e)}")
@@ -56,7 +73,7 @@ async def get_connected_servers(current_user: dict = Depends(get_current_user_fr
 async def connect_server(server_config: MCPServerConfig, current_user: dict = Depends(get_current_user_from_state)):
     """连接到MCP服务器"""
     try:
-        success = await mcp_server_manager.connect_server(server_config.dict())
+        success = await mcp_server_manager.register_server(server_config.model_dump())
         if success:
             return {"success": True, "message": f"成功连接到服务器: {server_config.name}"}
         else:
@@ -69,7 +86,7 @@ async def connect_server(server_config: MCPServerConfig, current_user: dict = De
 async def disconnect_server(server_id: str, current_user: dict = Depends(get_current_user_from_state)):
     """断开MCP服务器连接"""
     try:
-        success = await mcp_server_manager.disconnect_server(server_id)
+        success = await mcp_server_manager.unregister_server(server_id)
         if success:
             return {"success": True, "message": f"成功断开服务器连接: {server_id}"}
         else:
@@ -116,8 +133,8 @@ async def execute_tool_directly(
 ):
     """直接执行MCP工具（用于测试）"""
     try:
-        result = await mcp_server_manager.call_tool_with_permission(
-            session_id=session_id, tool_name=tool_name, parameters=parameters, require_permission=require_permission
+        result = await mcp_server_manager.call_tool(
+            tool_name=tool_name, parameters=parameters, session_id=session_id, require_permission=require_permission
         )
         return result
     except Exception as e:

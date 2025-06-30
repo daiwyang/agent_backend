@@ -1,287 +1,352 @@
 """
-MCP Server 集成管理器
-处理与MCP服务器的连接、工具调用等
+MCP Server 管理器 - 基于 FastMCP Client API 的轻量级封装
+直接使用 fastmcp Client，最小化中间层，专注于业务逻辑
 """
 
-import asyncio
-import json
 from typing import Any, Dict, List, Optional
+
+from fastmcp import Client
+from fastmcp.client.transports import StreamableHttpTransport
 
 from copilot.mcp.tool_permission_manager import tool_permission_manager
 from copilot.utils.logger import logger
 
 
-class MCPTool:
-    """MCP工具定义"""
-
-    def __init__(self, name: str, description: str, parameters: Dict[str, Any], risk_level: str = "medium"):
-        self.name = name
-        self.description = description
-        self.parameters = parameters
-        self.risk_level = risk_level
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {"name": self.name, "description": self.description, "parameters": self.parameters, "risk_level": self.risk_level}
-
-
 class MCPServerManager:
-    """MCP服务器管理器"""
+    """
+    MCP服务器管理器 - 直接基于 FastMCP Client API
+
+    去除不必要的中间层，直接使用 fastmcp.Client 作为核心
+    只封装必要的业务逻辑：配置管理、工具注册、权限控制
+    """
 
     def __init__(self):
-        self.connected_servers: Dict[str, Any] = {}
-        self.available_tools: Dict[str, MCPTool] = {}
-        self.server_processes: Dict[str, Any] = {}
+        # 服务器注册信息：{server_id: {"client": Client, "config": dict, "tools": dict}}
+        self.servers: Dict[str, Dict[str, Any]] = {}
+
+        # 全局工具索引：{tool_full_name: tool_info}
+        # tool_full_name 格式: "server_id::tool_name"
+        self.tools_index: Dict[str, Dict[str, Any]] = {}
 
     async def start(self):
         """启动MCP服务器管理器"""
         await tool_permission_manager.start()
-        logger.info("MCPServerManager started")
+        logger.info("MCPServerManager started with FastMCP")
 
     async def stop(self):
         """停止MCP服务器管理器"""
-        # 断开所有服务器连接
-        for server_id in list(self.connected_servers.keys()):
-            await self.disconnect_server(server_id)
+        # 清理所有服务器
+        for server_id in list(self.servers.keys()):
+            await self.unregister_server(server_id)
 
         await tool_permission_manager.stop()
         logger.info("MCPServerManager stopped")
 
-    async def connect_server(self, server_config: Dict[str, Any]) -> bool:
+    async def register_server(self, server_config: Dict[str, Any]) -> bool:
         """
-        连接到MCP服务器
+        注册 MCP 服务器
 
         Args:
-            server_config: 服务器配置
+            server_config: 标准 FastMCP 配置
             {
                 "id": "unique_server_id",
                 "name": "Server Name",
-                "command": ["python", "path/to/server.py"],
-                "env": {"VAR": "value"},
-                "args": []
+
+                # FastMCP 支持的配置：
+                "url": "https://api.example.com/mcp",  # HTTP/SSE
+                "auth": "token" | "oauth",             # 身份验证
+                "headers": {"X-API-Key": "key"},       # 自定义头部
+                "script": "./server.py",               # 本地脚本
+                "command": "python", "args": [...],    # Stdio
+                "transport": "stdio|http|sse",         # 传输方式
+                "timeout": 30.0,
+
+                # 业务配置：
+                "tool_risks": {"tool_name": "low|medium|high"}
             }
 
         Returns:
-            bool: 连接是否成功
+            bool: 注册是否成功
         """
         server_id = server_config["id"]
 
         try:
-            # 这里实现MCP协议的连接逻辑
-            # 由于MCP通常通过stdio或其他IPC方式通信，需要启动子进程
-
-            logger.info(f"Connecting to MCP server: {server_id}")
-
-            # 模拟连接过程
-            # 实际实现中需要：
-            # 1. 启动MCP服务器进程
-            # 2. 建立通信连接（stdio/IPC）
-            # 3. 执行MCP握手协议
-            # 4. 获取服务器提供的工具列表
-
-            # 模拟工具列表
-            mock_tools = [
-                MCPTool(
-                    name="file_read",
-                    description="读取文件内容",
-                    parameters={
-                        "type": "object",
-                        "properties": {"file_path": {"type": "string", "description": "文件路径"}},
-                        "required": ["file_path"],
-                    },
-                    risk_level="medium",
-                ),
-                MCPTool(
-                    name="web_search",
-                    description="搜索网页内容",
-                    parameters={
-                        "type": "object",
-                        "properties": {
-                            "query": {"type": "string", "description": "搜索查询"},
-                            "max_results": {"type": "integer", "description": "最大结果数"},
-                        },
-                        "required": ["query"],
-                    },
-                    risk_level="low",
-                ),
-                MCPTool(
-                    name="execute_code",
-                    description="执行代码",
-                    parameters={
-                        "type": "object",
-                        "properties": {
-                            "code": {"type": "string", "description": "要执行的代码"},
-                            "language": {"type": "string", "description": "编程语言"},
-                        },
-                        "required": ["code", "language"],
-                    },
-                    risk_level="high",
-                ),
-            ]
-
-            # 存储服务器信息
-            self.connected_servers[server_id] = {"config": server_config, "status": "connected", "tools": [tool.name for tool in mock_tools]}
-
-            # 注册工具
-            for tool in mock_tools:
-                tool_key = f"{server_id}:{tool.name}"
-                self.available_tools[tool_key] = tool
-
-            logger.info(f"Successfully connected to MCP server: {server_id}")
-            logger.info(f"Available tools: {[tool.name for tool in mock_tools]}")
-
-            return True
-
-        except Exception as e:
-            logger.error(f"Failed to connect to MCP server {server_id}: {e}")
-            return False
-
-    async def disconnect_server(self, server_id: str) -> bool:
-        """断开MCP服务器连接"""
-        try:
-            if server_id not in self.connected_servers:
-                logger.warning(f"Server not connected: {server_id}")
+            if server_id in self.servers:
+                logger.error(f"Server already registered: {server_id}")
                 return False
 
-            # 清理工具
-            tools_to_remove = [key for key in self.available_tools.keys() if key.startswith(f"{server_id}:")]
-            for tool_key in tools_to_remove:
-                del self.available_tools[tool_key]
+            if not self._validate_config(server_config):
+                return False
 
-            # 清理服务器信息
-            del self.connected_servers[server_id]
+            logger.info(f"Registering MCP server: {server_id}")
 
-            # 停止服务器进程（如果有）
-            if server_id in self.server_processes:
-                process = self.server_processes[server_id]
-                # 停止进程的逻辑
-                del self.server_processes[server_id]
+            # 直接使用 FastMCP Client
+            client = self._create_client(server_config)
 
-            logger.info(f"Disconnected from MCP server: {server_id}")
+            # 连接并发现工具
+            tools = await self._discover_tools(client, server_config)
+
+            if tools is None:  # 连接失败
+                return False
+
+            # 注册服务器和工具
+            self.servers[server_id] = {"client": client, "config": server_config, "tools": tools}
+
+            # 更新全局工具索引
+            self._update_tools_index(server_id, tools, server_config)
+
+            logger.info(f"Successfully registered server {server_id} with {len(tools)} tools")
             return True
 
         except Exception as e:
-            logger.error(f"Failed to disconnect from MCP server {server_id}: {e}")
+            logger.error(f"Failed to register server {server_id}: {e}")
             return False
 
-    async def call_tool_with_permission(
-        self, session_id: str, tool_name: str, parameters: Dict[str, Any], require_permission: bool = True
+    async def unregister_server(self, server_id: str) -> bool:
+        """注销 MCP 服务器"""
+        try:
+            if server_id not in self.servers:
+                logger.warning(f"Server not registered: {server_id}")
+                return False
+
+            # 清理工具索引
+            tools_to_remove = [name for name in self.tools_index.keys() if name.startswith(f"{server_id}::")]
+            for tool_name in tools_to_remove:
+                del self.tools_index[tool_name]
+
+            # 清理服务器
+            del self.servers[server_id]
+
+            logger.info(f"Unregistered server: {server_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to unregister server {server_id}: {e}")
+            return False
+
+    async def call_tool(
+        self, tool_name: str, parameters: Dict[str, Any], session_id: Optional[str] = None, require_permission: bool = True
     ) -> Dict[str, Any]:
         """
-        调用工具（带权限检查）
+        调用工具
 
         Args:
-            session_id: 会话ID
-            tool_name: 工具名称（格式：server_id:tool_name）
+            tool_name: 工具全名 "server_id::tool_name" 或简名 "tool_name"
             parameters: 工具参数
-            require_permission: 是否需要用户权限确认
+            session_id: 会话ID（权限检查需要）
+            require_permission: 是否需要权限检查
 
         Returns:
-            Dict[str, Any]: 工具执行结果
+            Dict: {"success": bool, "result": Any, "error": str}
         """
         try:
-            # 查找工具
-            tool = self.available_tools.get(tool_name)
-            if not tool:
+            # 解析工具名称
+            full_tool_name = self._resolve_tool_name(tool_name)
+            if not full_tool_name:
                 return {"success": False, "error": f"Tool not found: {tool_name}", "result": None}
 
-            # 检查是否需要用户权限
-            if require_permission:
-                # 根据风险级别决定是否需要用户确认
-                needs_confirmation = tool.risk_level in ["medium", "high"]
+            tool_info = self.tools_index[full_tool_name]
+            server_id, actual_tool_name = full_tool_name.split("::", 1)
 
-                if needs_confirmation:
-                    # 请求用户权限
-                    permission_granted = await tool_permission_manager.request_tool_permission(
-                        session_id=session_id,
-                        tool_name=tool.name,
-                        tool_description=tool.description,
-                        parameters=parameters,
-                        risk_level=tool.risk_level,
-                        timeout=300,  # 5分钟超时
-                    )
+            # 权限检查
+            if require_permission and session_id:
+                if not await self._check_permission(session_id, tool_info, parameters):
+                    return {"success": False, "error": "Permission denied or request timed out", "result": None, "permission_required": True}
 
-                    if not permission_granted:
-                        return {"success": False, "error": "User denied permission or request timed out", "result": None, "permission_required": True}
+            # 直接使用 FastMCP Client 调用工具
+            client = self.servers[server_id]["client"]
 
-            # 执行工具
-            result = await self._execute_tool(tool_name, parameters)
+            async with client:
+                result = await client.call_tool(actual_tool_name, parameters)
 
-            logger.info(f"Tool executed successfully: {tool_name}")
-            return {"success": True, "error": None, "result": result}
+                # 处理 FastMCP 结果格式
+                processed_result = self._process_tool_result(result)
+
+                logger.info(f"Tool executed successfully: {full_tool_name}")
+                return {"success": True, "result": processed_result, "error": None}
 
         except Exception as e:
             logger.error(f"Error calling tool {tool_name}: {e}")
             return {"success": False, "error": str(e), "result": None}
 
-    async def _execute_tool(self, tool_name: str, parameters: Dict[str, Any]) -> Any:
-        """
-        实际执行工具调用
-
-        Args:
-            tool_name: 工具名称
-            parameters: 工具参数
-
-        Returns:
-            Any: 工具执行结果
-        """
-        # 解析服务器ID和工具名
-        if ":" in tool_name:
-            server_id, actual_tool_name = tool_name.split(":", 1)
-        else:
-            server_id = "default"
-            actual_tool_name = tool_name
-
-        # 这里实现实际的MCP工具调用逻辑
-        # 需要向对应的MCP服务器发送工具调用请求
-
-        # 模拟不同工具的执行
-        if actual_tool_name == "file_read":
-            file_path = parameters.get("file_path", "")
-            return f"文件内容模拟：{file_path} 的内容"
-
-        elif actual_tool_name == "web_search":
-            query = parameters.get("query", "")
-            max_results = parameters.get("max_results", 5)
-            return {
-                "query": query,
-                "results": [
-                    {"title": f"搜索结果 {i+1}", "url": f"https://example.com/{i+1}", "snippet": f"关于 {query} 的内容"} for i in range(max_results)
-                ],
-            }
-
-        elif actual_tool_name == "execute_code":
-            code = parameters.get("code", "")
-            language = parameters.get("language", "python")
-            return {"code": code, "language": language, "output": f"代码执行结果模拟：{code[:50]}..."}
-
-        else:
-            return f"工具 {actual_tool_name} 执行结果模拟"
-
     def get_available_tools(self) -> List[Dict[str, Any]]:
-        """获取所有可用工具列表"""
-        tools = []
-        for tool_key, tool in self.available_tools.items():
-            server_id = tool_key.split(":", 1)[0] if ":" in tool_key else "default"
-            tool_dict = tool.to_dict()
-            tool_dict["server_id"] = server_id
-            tool_dict["tool_key"] = tool_key
-            tools.append(tool_dict)
-        return tools
+        """获取所有可用工具"""
+        return list(self.tools_index.values())
 
-    def get_connected_servers(self) -> List[Dict[str, Any]]:
-        """获取已连接的服务器列表"""
+    def get_servers_info(self) -> List[Dict[str, Any]]:
+        """获取服务器信息"""
         servers = []
-        for server_id, server_info in self.connected_servers.items():
+        for server_id, server_data in self.servers.items():
+            config = server_data["config"]
+            tools = server_data["tools"]
+
             servers.append(
                 {
                     "id": server_id,
-                    "name": server_info["config"].get("name", server_id),
-                    "status": server_info["status"],
-                    "tools_count": len(server_info["tools"]),
-                    "tools": server_info["tools"],
+                    "name": config.get("name", server_id),
+                    "status": "connected",  # 简化状态管理
+                    "tools_count": len(tools),
+                    "tools": list(tools.keys()),
                 }
             )
         return servers
+
+    def _create_client(self, config: Dict[str, Any]) -> Client:
+        """根据配置创建 FastMCP Client"""
+
+        # HTTP/SSE 服务器
+        if "url" in config:
+            url = config["url"]
+            timeout = config.get("timeout", 30.0)
+
+            # 处理身份验证
+            auth = config.get("auth")
+            headers = config.get("headers")
+
+            if headers and not auth:
+                # 自定义头部认证
+                transport = StreamableHttpTransport(url=url, headers=headers)
+                return Client(transport, timeout=timeout)
+            elif auth:
+                # 标准认证（Bearer/OAuth）
+                return Client(url, auth=auth, timeout=timeout)
+            else:
+                # 无认证
+                return Client(url, timeout=timeout)
+
+        # 本地脚本
+        elif "script" in config:
+            return Client(config["script"])
+
+        # Stdio 命令
+        elif "command" in config:
+            mcp_config = {
+                "mcpServers": {
+                    config["id"]: {
+                        "transport": "stdio",
+                        "command": config["command"],
+                        "args": config.get("args", []),
+                        "env": config.get("env", {}),
+                        "cwd": config.get("cwd"),
+                    }
+                }
+            }
+            return Client(mcp_config)
+
+        # 完整 MCP 配置
+        elif "transport" in config:
+            mcp_config = {"mcpServers": {config["id"]: {k: v for k, v in config.items() if k not in ["id", "name", "tool_risks"]}}}
+            return Client(mcp_config)
+
+        else:
+            raise ValueError(f"Invalid server configuration")
+
+    async def _discover_tools(self, client: Client, config: Dict[str, Any]) -> Optional[Dict[str, Dict[str, Any]]]:
+        """发现工具"""
+        try:
+            async with client:
+                # 验证连接
+                await client.ping()
+
+                # 获取工具列表
+                tools_response = await client.list_tools()
+
+                tools = {}
+                tool_risks = config.get("tool_risks", {})
+
+                for tool in tools_response.tools:
+                    tools[tool.name] = {
+                        "name": tool.name,
+                        "description": tool.description or "",
+                        "parameters": tool.inputSchema or {},
+                        "risk_level": tool_risks.get(tool.name, "medium"),
+                    }
+
+                return tools
+
+        except Exception as e:
+            logger.error(f"Failed to discover tools: {e}")
+            return None
+
+    def _update_tools_index(self, server_id: str, tools: Dict[str, Dict[str, Any]], config: Dict[str, Any]):
+        """更新全局工具索引"""
+        for tool_name, tool_info in tools.items():
+            full_name = f"{server_id}::{tool_name}"
+
+            self.tools_index[full_name] = {**tool_info, "server_id": server_id, "server_name": config.get("name", server_id), "full_name": full_name}
+
+    def _resolve_tool_name(self, tool_name: str) -> Optional[str]:
+        """解析工具名称，支持简名和全名"""
+        # 如果是全名，直接查找
+        if "::" in tool_name and tool_name in self.tools_index:
+            return tool_name
+
+        # 如果是简名，查找匹配的工具
+        matches = [name for name in self.tools_index.keys() if name.split("::", 1)[1] == tool_name]
+
+        if len(matches) == 1:
+            return matches[0]
+        elif len(matches) > 1:
+            logger.warning(f"Multiple tools named '{tool_name}': {matches}")
+            return matches[0]  # 返回第一个匹配
+        else:
+            return None
+
+    async def _check_permission(self, session_id: str, tool_info: Dict[str, Any], parameters: Dict[str, Any]) -> bool:
+        """检查工具权限"""
+        risk_level = tool_info.get("risk_level", "medium")
+
+        # 低风险工具直接放行
+        if risk_level == "low":
+            return True
+
+        # 中高风险工具需要用户确认
+        return await tool_permission_manager.request_tool_permission(
+            session_id=session_id,
+            tool_name=tool_info["name"],
+            tool_description=tool_info["description"],
+            parameters=parameters,
+            risk_level=risk_level,
+            timeout=300,
+        )
+
+    def _process_tool_result(self, result: Any) -> Any:
+        """处理 FastMCP 工具调用结果"""
+        if hasattr(result, "content") and result.content:
+            # 提取文本内容
+            text_parts = []
+            for content in result.content:
+                if hasattr(content, "text"):
+                    text_parts.append(content.text)
+            return "\n".join(text_parts) if text_parts else str(result)
+        else:
+            return str(result)
+
+    def _validate_config(self, config: Dict[str, Any]) -> bool:
+        """验证服务器配置"""
+        if not config.get("id"):
+            logger.error("Missing required field: 'id'")
+            return False
+
+        if not config.get("name"):
+            logger.error("Missing required field: 'name'")
+            return False
+
+        # 验证连接配置
+        connection_fields = ["url", "script", "command", "transport"]
+        if not any(config.get(field) for field in connection_fields):
+            logger.error("Must specify at least one connection method")
+            return False
+
+        # 验证风险级别
+        tool_risks = config.get("tool_risks", {})
+        valid_levels = {"low", "medium", "high"}
+        for tool_name, risk in tool_risks.items():
+            if risk not in valid_levels:
+                logger.error(f"Invalid risk level '{risk}' for tool '{tool_name}'")
+                return False
+
+        return True
 
 
 # 全局实例
