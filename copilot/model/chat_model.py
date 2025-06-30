@@ -21,6 +21,8 @@ class CreateSessionResponse(BaseModel):
 class ChatRequest(BaseModel):
     session_id: str
     message: str
+    enable_mcp_tools: Optional[bool] = True  # 默认启用MCP工具
+    attachments: Optional[List[dict]] = None  # 多模态附件
 
 
 class ChatResponse(BaseModel):

@@ -85,113 +85,93 @@ async def create_session(request: CreateSessionRequestWithAuth, current_user: di
 
 
 @router.post("/chat")
-async def chat(request: ChatRequest, current_user: dict = Depends(get_current_user_from_state)):
-    """发送聊天消息 - HTTP流式响应"""
-    import asyncio
-    import json
-
-    async def generate_response():
-        try:
-            # 验证session属于当前用户
-            user_id = current_user.get("user_id")
-            if not user_id:
-                error_data = json.dumps({"type": "error", "content": "用户ID缺失"}) + "\n"
-                yield error_data.encode("utf-8")
-                return
-
-            # 获取session并验证所有权
-            session = await session_manager.get_session(request.session_id)
-            if session is None:
-                error_data = json.dumps({"type": "error", "content": "会话不存在"}) + "\n"
-                yield error_data.encode("utf-8")
-                return
-
-            if session.user_id != user_id:
-                error_data = json.dumps({"type": "error", "content": "无权访问此会话"}) + "\n"
-                yield error_data.encode("utf-8")
-                return
-
-            # 发送开始事件
-            start_data = json.dumps({"type": "start", "session_id": request.session_id}) + "\n"
-            yield start_data.encode("utf-8")
-
-            response_content = ""
-            content_buffer = ""  # 用于缓冲小块内容
-            message_ids = None  # 存储消息ID
-
-            async for chunk in chat_service.chat_stream(request.session_id, request.message):
-                if "error" in chunk:
-                    error_data = json.dumps({"type": "error", "content": chunk["error"]}) + "\n"
-                    yield error_data.encode("utf-8")
-                    break
-                elif "content" in chunk:
-                    response_content += chunk["content"]
-                    content_buffer += chunk["content"]
-
-                    # 当缓冲区达到一定大小或遇到标点符号时发送数据
-                    if len(content_buffer) >= 5 or any(char in content_buffer for char in "，。！？；：\n"):
-                        content_data = json.dumps({"type": "content", "content": content_buffer}) + "\n"
-                        yield content_data.encode("utf-8")
-                        content_buffer = ""  # 清空缓冲区
-
-                        # 确保数据立即发送
-                        await asyncio.sleep(0)
-                elif "finished" in chunk and chunk["finished"]:
-                    # 获取消息ID
-                    message_ids = chunk.get("message_ids", {})
-
-            # 发送剩余的缓冲内容
-            if content_buffer:
-                content_data = json.dumps({"type": "content", "content": content_buffer}) + "\n"
-                yield content_data.encode("utf-8")
-
-            # 消息保存已在session_service中处理
-
-            # 发送结束事件，包含message_id
-            end_data = {
-                "type": "end", 
-                "session_id": request.session_id
-            }
-            if message_ids:
-                end_data["message_ids"] = message_ids
-            
-            end_data_json = json.dumps(end_data) + "\n"
-            yield end_data_json.encode("utf-8")
-
-        except ValueError as e:
-            error_data = json.dumps({"type": "error", "content": str(e)}) + "\n"
-            yield error_data.encode("utf-8")
-        except Exception as e:
-            error_data = json.dumps({"type": "error", "content": "处理请求时出现错误"}) + "\n"
-            yield error_data.encode("utf-8")
-
-    return StreamingResponse(
-        generate_response(),
-        media_type="application/x-ndjson",
-        headers={
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Connection": "keep-alive",
-            "Transfer-Encoding": "chunked",
-            "X-Accel-Buffering": "no",  # 禁用Nginx缓冲
-            "Content-Encoding": "identity",  # 禁用压缩
-        },
-    )
-
-
-@router.post("/chat/non-stream", response_model=ChatResponse)
-async def chat_non_stream(request: ChatRequest):
-    """发送聊天消息 - 非流式响应（向后兼容）"""
+async def chat(
+    request: ChatRequest,
+    current_user: dict = Depends(get_current_user_from_state),
+):
+    """统一的流式聊天接口"""
     try:
-        response = await chat_service.chat(request.session_id, request.message)
+        # 验证session属于当前用户
+        user_id = current_user.get("user_id")
+        if not user_id:
+            raise_validation_error("用户ID缺失")
 
-        # 取第一个响应消息
-        response_text = response.messages[0].content if response.messages else "无响应"
+        # 获取session并验证所有权
+        session = await session_manager.get_session(request.session_id)
+        if session is None:
+            raise_chat_error(ErrorCodes.CHAT_SESSION_NOT_FOUND, "会话不存在")
 
-        return ChatResponse(session_id=request.session_id, response=response_text, timestamp=datetime.now())
+        if session.user_id != user_id:
+            raise_chat_error(ErrorCodes.CHAT_PERMISSION_DENIED, "无权访问此会话")
+
+        # 始终返回流式响应
+        return StreamingResponse(
+            _generate_stream_response(request),
+            media_type="text/plain",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+                "Content-Encoding": "identity",
+            },
+        )
+
     except ValueError as e:
         raise_chat_error(ErrorCodes.CHAT_SESSION_NOT_FOUND, str(e))
     except Exception as e:
         raise ErrorHandler.handle_system_error(e, "聊天消息处理")
+
+
+async def _generate_stream_response(request: ChatRequest):
+    """生成流式响应的内部方法"""
+    import asyncio
+    import json
+
+    try:
+        # 发送开始事件
+        start_data = json.dumps({"type": "start", "session_id": request.session_id}) + "\n"
+        yield start_data.encode("utf-8")
+
+        response_content = ""
+        content_buffer = ""
+        message_ids = None
+
+        # 使用统一的流式聊天方法
+        async for chunk in chat_service.chat(
+            session_id=request.session_id,
+            message=request.message,
+            attachments=request.attachments,
+            enable_tools=request.enable_mcp_tools,
+        ):
+            if "error" in chunk:
+                error_data = json.dumps({"type": "error", "content": chunk["error"]}) + "\n"
+                yield error_data.encode("utf-8")
+                return
+            elif "content" in chunk:
+                response_content += chunk["content"]
+                content_buffer += chunk["content"]
+
+                # 当缓冲区达到一定大小或遇到标点符号时发送数据
+                if len(content_buffer) >= 5 or any(char in content_buffer for char in "，。！？；：\n"):
+                    content_data = json.dumps({"type": "content", "content": content_buffer}) + "\n"
+                    yield content_data.encode("utf-8")
+                    content_buffer = ""
+                    await asyncio.sleep(0)
+            elif "finished" in chunk and chunk["finished"]:
+                message_ids = chunk.get("message_ids", {})
+
+        # 发送剩余的缓冲内容
+        if content_buffer:
+            content_data = json.dumps({"type": "content", "content": content_buffer}) + "\n"
+            yield content_data.encode("utf-8")
+
+        # 发送结束事件
+        end_data = json.dumps({"type": "end", "session_id": request.session_id, "message_ids": message_ids, "total_content": response_content}) + "\n"
+        yield end_data.encode("utf-8")
+
+    except Exception as e:
+        error_data = json.dumps({"type": "error", "content": f"处理请求时出现错误: {str(e)}"}) + "\n"
+        yield error_data.encode("utf-8")
 
 
 @router.get("/sessions/{session_id}/history", response_model=ChatHistoryResponse)
@@ -211,12 +191,7 @@ async def get_chat_history(
         return ChatHistoryResponse(
             session_id=session_id,
             messages=[
-                ChatMessage(
-                    message_id=msg.message_id,
-                    role=msg.role, 
-                    content=msg.content, 
-                    timestamp=msg.timestamp
-                ) for msg in paginated_messages
+                ChatMessage(message_id=msg.message_id, role=msg.role, content=msg.content, timestamp=msg.timestamp) for msg in paginated_messages
             ],
             total_count=total_count,
         )
@@ -228,7 +203,7 @@ async def get_chat_history(
 async def get_user_sessions(
     current_user: dict = Depends(get_current_user_from_state),
     include_deleted: bool = Query(False, description="是否包含已删除的会话"),
-    limit: int = Query(50, description="返回数量限制")
+    limit: int = Query(50, description="返回数量限制"),
 ):
     """获取当前用户的所有会话（包括活跃和非活跃的）"""
     try:
@@ -239,6 +214,7 @@ async def get_user_sessions(
 
         # 直接从数据库查询所有会话
         from copilot.utils.mongo_client import get_mongo_manager
+
         mongo_manager = await get_mongo_manager()
         sessions_collection = await mongo_manager.get_collection("chat_sessions")
 
@@ -252,25 +228,23 @@ async def get_user_sessions(
             cursor = cursor.limit(limit)
 
         sessions = await cursor.to_list(length=None)
-        
+
         # 转换为响应格式
         result = []
         for session in sessions:
-            result.append({
-                "session_id": session["session_id"],
-                "user_id": session["user_id"],
-                "window_id": session["window_id"],
-                "thread_id": session["thread_id"],
-                "created_at": session["created_at"].isoformat(),
-                "last_activity": session["last_activity"].isoformat(),
-                "status": session.get("status", "available")
-            })
+            result.append(
+                {
+                    "session_id": session["session_id"],
+                    "user_id": session["user_id"],
+                    "window_id": session["window_id"],
+                    "thread_id": session["thread_id"],
+                    "created_at": session["created_at"].isoformat(),
+                    "last_activity": session["last_activity"].isoformat(),
+                    "status": session.get("status", "available"),
+                }
+            )
 
-        return {
-            "user_id": user_id,
-            "sessions": result,
-            "total_count": len(result)
-        }
+        return {"user_id": user_id, "sessions": result, "total_count": len(result)}
     except HTTPException:
         raise
     except Exception as e:
@@ -357,19 +331,19 @@ async def get_message_by_id(message_id: str, current_user: dict = Depends(get_cu
 
         # 获取消息详情
         message = await chat_service.get_message_by_id(message_id, user_id)
-        
+
         if not message:
             raise_validation_error("消息不存在或无权限访问")
-        
+
         return {
             "message_id": message_id,
             "session_id": message.get("session_id"),
             "role": message.get("role"),
             "content": message.get("content"),
             "timestamp": message.get("timestamp"),
-            "metadata": message.get("metadata", {})
+            "metadata": message.get("metadata", {}),
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:

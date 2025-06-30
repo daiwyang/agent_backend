@@ -96,117 +96,75 @@ class ChatService:
 
         return LLMProviderManager.get_provider_recommendations()
 
-    async def chat_stream(self, session_id: str, message: str) -> AsyncGenerator[Dict[str, Any], None]:
+    async def chat(self, session_id: str, message: str, attachments: List[dict] = None, enable_tools: bool = True):
         """
-        流式聊天
+        统一的流式聊天接口，支持多模态、工具调用
 
         Args:
             session_id: 会话ID
             message: 用户消息
+            attachments: 附件列表（包含图片等）
+            enable_tools: 是否启用工具调用
 
         Yields:
-            Dict: 响应片段，包含token信息
+            Dict: 响应数据，包含content、finished、error等字段
         """
+        # 1. 验证会话
+        session_info = await self._validate_session(session_id)
+
+        # 2. 预处理输入
+        images = self._extract_images(attachments)
+
+        # 3. 使用流式处理
+        async for chunk in self._chat_stream_internal(session_info, message, images, enable_tools, attachments):
+            yield chunk
+
+    async def _validate_session(self, session_id: str) -> SessionInfo:
+        """验证会话有效性"""
         session_info = await session_manager.get_session(session_id)
         if not session_info:
-            yield {"error": f"Session {session_id} not found or expired"}
-            return
+            raise ValueError(f"Session {session_id} not found or expired")
+        return session_info
 
+    def _extract_images(self, attachments: List[dict] = None) -> List[dict]:
+        """从附件中提取图片"""
+        if not attachments:
+            return []
+        return [att for att in attachments if att.get("type") == "image"]
+
+    async def _chat_stream_internal(
+        self, session_info: SessionInfo, message: str, images: List[dict], enable_tools: bool, attachments: List[dict] = None
+    ):
+        """内部流式聊天方法"""
         try:
             full_response = ""
 
             # 使用核心Agent进行流式聊天
-            async for content in self.core_agent.chat_stream(session_info.thread_id, message):
+            async for content in self.core_agent.chat(
+                message=message,
+                thread_id=session_info.thread_id,
+                session_id=session_info.session_id,
+                images=images if images else None,
+                enable_tools=enable_tools,
+            ):
                 if content:
                     yield {"content": content}
                     full_response += content
 
-            # 计算token使用量
+            # 计算token使用量并保存对话
             if full_response:
                 token_usage = self.core_agent._estimate_token_usage(message, full_response)
+                message_ids = await self._save_conversation(session_info.session_id, message, full_response, token_usage, attachments)
 
-                # 保存完整对话到数据库，包含token信息
-                message_ids = await self._save_conversation(session_id, message, full_response, token_usage)
-
-                # 返回最终的token统计和message_id
-                yield {
-                    "finished": True, 
-                    "token_usage": token_usage, 
-                    "total_tokens": token_usage.get("total_tokens", 0),
-                    "message_ids": message_ids
-                }
+                # 返回最终统计信息
+                yield {"finished": True, "token_usage": token_usage, "total_tokens": token_usage.get("total_tokens", 0), "message_ids": message_ids}
 
             # 更新会话活动时间
-            await session_manager.get_session(session_id)
+            await session_manager.get_session(session_info.session_id)
 
         except Exception as e:
-            logger.error(f"Error in chat_stream for session {session_id}: {str(e)}")
+            logger.error(f"Error in stream chat for session {session_info.session_id}: {str(e)}")
             yield {"error": "处理请求时出现错误"}
-
-    async def chat_multimodal(self, session_id: str, message: str, attachments: List[dict] = None) -> ChatResponse:
-        """
-        多模态聊天接口
-
-        Args:
-            session_id: 会话ID
-            message: 用户消息
-            attachments: 附件列表（包含图片）
-
-        Returns:
-            ChatResponse: 聊天响应
-        """
-        session_info = await session_manager.get_session(session_id)
-        if not session_info:
-            raise ValueError(f"Session {session_id} not found or expired")
-
-        # 提取图片附件
-        images = []
-        if attachments:
-            images = [att for att in attachments if att.get("type") == "image"]
-
-        # 使用核心Agent进行多模态聊天
-        if images:
-            response_content = await self.core_agent.process_multimodal_input(session_info.thread_id, message, images)
-        else:
-            response_content = await self.core_agent.chat(session_info.thread_id, message)
-
-        # 保存消息到数据库（包含附件信息）
-        token_usage = self.core_agent._estimate_token_usage(message, response_content)
-        message_ids = await self._save_conversation(session_id, message, response_content, token_usage, attachments)
-
-        # 更新会话活动时间
-        await session_manager.get_session(session_id)
-
-        response_message = ChatMessage(role="assistant", content=response_content, message_id=message_ids.get("assistant_message_id"))
-        return ChatResponse(session_id=session_id, messages=[response_message], context=session_info.context)
-
-    async def chat(self, session_id: str, message: str) -> ChatResponse:
-        """
-        常规聊天接口（非流式）
-
-        Args:
-            session_id: 会话ID
-            message: 用户消息
-
-        Returns:
-            ChatResponse: 聊天响应，包含message_id
-        """
-        session_info = await session_manager.get_session(session_id)
-        if not session_info:
-            raise ValueError(f"Session {session_id} not found or expired")
-
-        # 使用核心Agent进行聊天
-        response_content = await self.core_agent.chat(session_info.thread_id, message)
-
-        # 保存消息到数据库
-        token_usage = self.core_agent._estimate_token_usage(message, response_content)
-        message_ids = await self._save_conversation(session_id, message, response_content, token_usage)
-
-        # 更新会话活动时间
-        await session_manager.get_session(session_id)
-
-        response_message = ChatMessage(role="assistant", content=response_content, message_id=message_ids.get("assistant_message_id"))
-        return ChatResponse(session_id=session_id, messages=[response_message], context=session_info.context)
 
     async def _save_conversation(
         self, session_id: str, user_message: str, assistant_message: str, token_usage: Dict[str, int] = None, attachments: List[dict] = None
@@ -220,7 +178,7 @@ class ChatService:
             assistant_message: 助手回复
             token_usage: token使用量统计
             attachments: 附件列表（可选，用于多模态）
-            
+
         Returns:
             Dict[str, str]: 包含用户消息和助手消息的message_id
         """
@@ -240,7 +198,9 @@ class ChatService:
             if attachments:
                 user_metadata.update({"attachments": attachments, "is_multimodal": True})
 
-            user_message_id = await self.chat_history_manager.save_message(session_id=session_id, role="user", content=user_message, metadata=user_metadata)
+            user_message_id = await self.chat_history_manager.save_message(
+                session_id=session_id, role="user", content=user_message, metadata=user_metadata
+            )
 
             # 保存助手消息
             assistant_metadata = {
@@ -259,12 +219,9 @@ class ChatService:
             )
 
             logger.debug(f"Saved conversation with token usage: {usage.to_dict()}")
-            
+
             # 返回message_id
-            return {
-                "user_message_id": user_message_id,
-                "assistant_message_id": assistant_message_id
-            }
+            return {"user_message_id": user_message_id, "assistant_message_id": assistant_message_id}
 
         except Exception as e:
             logger.warning(f"Failed to save conversation to database: {str(e)}")

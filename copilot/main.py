@@ -9,9 +9,12 @@ from fastapi.responses import JSONResponse
 
 from copilot.middleware.auth_middleware import authentication_middleware
 from copilot.router import chat_router, user_router
+from copilot.router import mcp_router, websocket_router
 from copilot.utils.logger import logger
 from copilot.utils.mongo_client import get_mongo_manager
 from copilot.utils.redis_client import close_redis, init_redis
+from copilot.mcp.mcp_server_manager import mcp_server_manager
+from copilot.mcp.tool_permission_manager import tool_permission_manager
 
 
 @asynccontextmanager
@@ -24,6 +27,10 @@ async def lifespan(app: FastAPI):
 
         await init_redis()
         logger.info("Redis connection pool initialized successfully")
+
+        # 启动MCP管理器
+        await mcp_server_manager.start()
+        logger.info("MCP server manager started")
     except Exception as e:
         logger.error(f"Failed to initialize connection pools: {str(e)}")
         raise
@@ -38,6 +45,10 @@ async def lifespan(app: FastAPI):
 
         await close_redis()
         logger.info("Redis connections closed")
+        
+        # 停止MCP管理器
+        await mcp_server_manager.stop()
+        logger.info("MCP server manager stopped")
     except Exception as e:
         logger.warning(f"Error closing connections: {str(e)}")
 
@@ -46,6 +57,8 @@ app = FastAPI(lifespan=lifespan)
 
 app.include_router(chat_router.router, prefix="/agent_backend", tags=["agent_backend"])
 app.include_router(user_router.router, prefix="/agent_backend", tags=["用户管理"])
+app.include_router(mcp_router.router, prefix="/agent_backend", tags=["MCP工具"])
+app.include_router(websocket_router.router, prefix="/agent_backend", tags=["WebSocket"])
 
 # 添加CORS中间件
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])

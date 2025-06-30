@@ -1,5 +1,5 @@
 """
-核心Agent - 支持多个LLM提供商
+核心Agent - 支持多个LLM提供商和MCP工具
 """
 
 from typing import Any, AsyncGenerator, Dict, List, Optional
@@ -8,12 +8,13 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 
 from copilot.core.llm_factory import LLMFactory
+from copilot.mcp.mcp_server_manager import mcp_server_manager
 from copilot.utils.logger import logger
 from copilot.utils.token_calculator import TokenCalculator
 
 
 class CoreAgent:
-    """核心Agent - 支持多个LLM提供商"""
+    """核心Agent - 支持多个LLM提供商和MCP工具"""
 
     def __init__(self, provider: Optional[str] = None, model_name: Optional[str] = None, tools: List = None, **llm_kwargs):
         """
@@ -30,6 +31,7 @@ class CoreAgent:
         self.tools = tools or []
         self.llm_kwargs = llm_kwargs
         self.memory = MemorySaver()
+        self.enable_mcp_tools = True  # 启用MCP工具支持
 
         # 初始化LLM
         try:
@@ -39,10 +41,135 @@ class CoreAgent:
             logger.error(f"Failed to initialize LLM: {str(e)}")
             raise
 
+        # 合并MCP工具和传统工具
+        all_tools = self._merge_tools()
+
         # 创建LangGraph agent
         self.graph = create_react_agent(
-            self.llm, tools=self.tools, prompt="You are a helpful assistant. Please respond in Chinese.", checkpointer=self.memory
+            self.llm, tools=all_tools, prompt="You are a helpful assistant. Please respond in Chinese.", checkpointer=self.memory
         )
+
+    def _merge_tools(self) -> List:
+        """合并传统工具和MCP工具"""
+        merged_tools = self.tools.copy()
+
+        if self.enable_mcp_tools:
+            # 添加MCP工具包装器
+            mcp_tools = self._create_mcp_tool_wrappers()
+            merged_tools.extend(mcp_tools)
+
+        return merged_tools
+
+    def _create_mcp_tool_wrappers(self) -> List:
+        """创建MCP工具的LangChain包装器"""
+        wrappers = []
+
+        # 获取所有可用的MCP工具
+        available_tools = mcp_server_manager.get_available_tools()
+
+        for tool_info in available_tools:
+            # 创建工具函数
+            async def mcp_tool_func(session_id: str, **kwargs):
+                return await mcp_server_manager.call_tool_with_permission(
+                    session_id=session_id, tool_name=tool_info["tool_key"], parameters=kwargs, require_permission=True
+                )
+
+            # 这里需要创建LangChain工具包装器
+            # 具体实现取决于LangChain的工具接口
+            # wrappers.append(create_langchain_tool(tool_info, mcp_tool_func))
+
+        return wrappers
+
+    async def chat(
+        self,
+        message: str,
+        thread_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        images: Optional[List] = None,
+        enable_tools: bool = True,
+    ):
+        """
+        统一的流式聊天接口，支持多模态、工具调用
+
+        Args:
+            message: 用户消息
+            thread_id: 线程ID（用于会话管理）
+            session_id: 会话ID（用于MCP工具权限管理）
+            images: 图片列表（多模态输入）
+            enable_tools: 是否启用工具调用
+
+        Yields:
+            str: 响应片段
+        """
+        # 1. 准备配置
+        config = self._prepare_config(thread_id, session_id)
+
+        # 2. 构建输入消息
+        inputs = await self._build_inputs(message, images, session_id, enable_tools)
+
+        # 3. 使用流式输出
+        async for chunk in self._chat_stream_internal(inputs, config):
+            yield chunk
+
+    def _prepare_config(self, thread_id: Optional[str], session_id: Optional[str]) -> Dict:
+        """准备LangGraph配置"""
+        config = {}
+        if thread_id:
+            config["configurable"] = {"thread_id": thread_id}
+        if session_id:
+            config.setdefault("configurable", {})["session_id"] = session_id
+        return config
+
+    async def _build_inputs(self, message: str, images: Optional[List], session_id: Optional[str], enable_tools: bool) -> Dict:
+        """构建输入消息"""
+        # 处理MCP工具的session_id注入
+        if session_id and enable_tools and self.enable_mcp_tools:
+            message = f"[SESSION_ID:{session_id}] {message}"
+
+        # 构建消息内容
+        if images and self._supports_multimodal():
+            # 多模态输入
+            content = [{"type": "text", "text": message}]
+            for img in images:
+                processed_img = await self._preprocess_image(img)
+                content.append(processed_img)
+        else:
+            # 纯文本输入
+            content = message
+
+        return {"messages": [{"role": "user", "content": content}]}
+
+    def _supports_multimodal(self) -> bool:
+        """检查当前提供商是否支持多模态"""
+        return self.provider in ["openai", "claude", "gemini"]
+
+    async def _chat_stream_internal(self, inputs: Dict, config: Dict) -> AsyncGenerator[str, None]:
+        """内部流式聊天方法"""
+        try:
+            # 尝试使用流式输出
+            async for chunk in self.graph.astream(inputs, config=config, stream_mode="messages"):
+                if chunk and len(chunk) >= 2:
+                    message_chunk, _ = chunk
+                    if hasattr(message_chunk, "content") and message_chunk.content:
+                        yield str(message_chunk.content)
+            return
+        except Exception as e:
+            logger.warning(f"Streaming failed: {str(e)}, falling back to chunk mode")
+
+        # 回退到分块模式
+        try:
+            async for chunk in self.graph.astream(inputs, config=config, stream_mode="updates"):
+                if "agent" in chunk and "messages" in chunk["agent"]:
+                    for msg in chunk["agent"]["messages"]:
+                        if hasattr(msg, "content") and msg.content:
+                            content = str(msg.content)
+                            # 简单分块
+                            for i in range(0, len(content), 30):
+                                yield content[i : i + 30]
+                            return
+        except Exception as e:
+            logger.error(f"Error in chat_stream: {str(e)}")
+            yield f"处理请求时出现错误: {str(e)}"
 
     def get_provider_info(self) -> Dict[str, Any]:
         """
@@ -80,9 +207,10 @@ class CoreAgent:
             self.llm_kwargs = llm_kwargs
             self.llm = new_llm
 
-            # 重新创建agent
+            # 重新创建agent - 注意要使用合并后的工具
+            all_tools = self._merge_tools()
             self.graph = create_react_agent(
-                self.llm, tools=self.tools, prompt="You are a helpful assistant. Please respond in Chinese.", checkpointer=self.memory
+                self.llm, tools=all_tools, prompt="You are a helpful assistant. Please respond in Chinese.", checkpointer=self.memory
             )
 
             logger.info(f"Successfully switched to provider: {provider}, model: {model_name}")
@@ -92,75 +220,6 @@ class CoreAgent:
             logger.error(f"Failed to switch provider: {str(e)}")
             return False
 
-    async def chat_stream(self, thread_id: str, message: str) -> AsyncGenerator[str, None]:
-        """
-        流式聊天接口
-
-        Args:
-            thread_id: 线程ID
-            message: 用户消息
-
-        Yields:
-            str: 响应片段
-        """
-        config = {"configurable": {"thread_id": thread_id}}
-        inputs = {"messages": [{"role": "user", "content": message}]}
-
-        try:
-            # 尝试使用流式输出
-            async for chunk in self.graph.astream(inputs, config=config, stream_mode="messages"):
-                if chunk and len(chunk) >= 2:
-                    message_chunk, _ = chunk
-                    if hasattr(message_chunk, "content") and message_chunk.content:
-                        yield str(message_chunk.content)
-            return
-        except Exception as e:
-            logger.warning(f"Streaming failed: {str(e)}, falling back to chunk mode")
-
-        # 回退到分块模式
-        try:
-            async for chunk in self.graph.astream(inputs, config=config, stream_mode="updates"):
-                if "agent" in chunk and "messages" in chunk["agent"]:
-                    for msg in chunk["agent"]["messages"]:
-                        if hasattr(msg, "content") and msg.content:
-                            content = str(msg.content)
-                            # 简单分块
-                            for i in range(0, len(content), 30):
-                                yield content[i : i + 30]
-                            return
-        except Exception as e:
-            logger.error(f"Error in chat_stream: {str(e)}")
-            yield f"处理请求时出现错误: {str(e)}"
-
-    async def process_multimodal_input(self, thread_id: str, message: str, images: List = None) -> str:
-        """
-        处理多模态输入（文本+图片）
-
-        Args:
-            thread_id: 线程ID
-            message: 文本消息
-            images: 图片列表（base64或URL）
-
-        Returns:
-            str: 模型回复
-        """
-        # 1. 图片预处理
-        processed_images = []
-        if images:
-            for img in images:
-                # 图片压缩、格式转换、编码等
-                processed_img = await self._preprocess_image(img)
-                processed_images.append(processed_img)
-
-        # 2. 构造多模态输入
-        multimodal_input = {"text": message, "images": processed_images, "thread_id": thread_id}
-
-        # 3. 发送到多模态模型
-        # 这里需要集成支持视觉的模型，如 GPT-4V、Claude-3、Gemini Pro Vision 等
-        response = await self._call_multimodal_model(multimodal_input)
-
-        return response
-
     async def _preprocess_image(self, image_data: dict) -> dict:
         """
         图片预处理
@@ -168,107 +227,23 @@ class CoreAgent:
         - 尺寸调整
         - 质量压缩
         """
-        # 实现图片预处理逻辑
-        return {
-            "type": "image",
-            "source": {"type": "base64", "media_type": image_data.get("mime_type", "image/jpeg"), "data": image_data.get("base64")},
-        }
-
-    async def _call_multimodal_model(self, input_data: dict) -> str:
-        """
-        调用多模态模型API
-        支持的模型：
-        - OpenAI GPT-4V
-        - Anthropic Claude-3
-        - Google Gemini Pro Vision
-        """
-        try:
-            # 根据当前提供商处理多模态输入
-            if self.provider == "openai":
-                # GPT-4V 支持
-                messages = [{"role": "user", "content": [{"type": "text", "text": input_data["text"]}] + input_data.get("images", [])}]
-
-                # 使用当前的LLM实例进行推理
-                config = {"configurable": {"thread_id": input_data["thread_id"]}}
-                inputs = {"messages": messages}
-
-                for chunk in self.graph.stream(inputs, config=config, stream_mode="updates"):
-                    if "agent" in chunk:
-                        for msg in chunk["agent"]["messages"]:
-                            if msg.content:
-                                return str(msg.content)
-
-            elif self.provider == "claude":
-                # Claude-3 支持
-                messages = [{"role": "user", "content": [{"type": "text", "text": input_data["text"]}] + input_data.get("images", [])}]
-
-                config = {"configurable": {"thread_id": input_data["thread_id"]}}
-                inputs = {"messages": messages}
-
-                for chunk in self.graph.stream(inputs, config=config, stream_mode="updates"):
-                    if "agent" in chunk:
-                        for msg in chunk["agent"]["messages"]:
-                            if msg.content:
-                                return str(msg.content)
-
-            elif self.provider == "gemini":
-                # Gemini Pro Vision 支持
-                # Google 格式可能需要特殊处理
-                return f"我看到了您提供的图片。{input_data['text']} (Gemini 多模态处理)"
-
-            else:
-                # 其他提供商暂不支持多模态
-                return f"当前使用的 {self.provider} 提供商暂不支持图片分析功能。您的消息：{input_data['text']}"
-
-        except Exception as e:
-            logger.error(f"Error in multimodal processing: {str(e)}")
-            return f"处理多模态输入时出现错误：{str(e)}"
-
-        return f"我看到了您提供的图片。{input_data['text']}"
-
-    async def chat_stream_multimodal(self, thread_id: str, message: str, images: List = None) -> AsyncGenerator[str, None]:
-        """
-        多模态流式聊天接口
-
-        Args:
-            thread_id: 线程ID
-            message: 用户消息
-            images: 图片列表
-
-        Yields:
-            str: 响应片段
-        """
-        config = {"configurable": {"thread_id": thread_id}}
-
-        # 构造多模态输入
-        content = [{"type": "text", "text": message}]
-
-        if images:
-            for img in images:
-                content.append(
-                    {"type": "image_url", "image_url": {"url": img.get("url") or f"data:{img.get('mime_type')};base64,{img.get('base64')}"}}
-                )
-
-        inputs = {"messages": [{"role": "user", "content": content}]}
-
-        # 检查当前提供商是否支持多模态
-        multimodal_providers = ["openai", "claude", "gemini"]
-
-        if self.provider in multimodal_providers:
-            # 使用真正的多模态流式输出
-            try:
-                async for chunk in self.graph.astream(inputs, config=config, stream_mode="messages"):
-                    if chunk and len(chunk) >= 2:
-                        message_chunk, _ = chunk
-                        if hasattr(message_chunk, "content") and message_chunk.content:
-                            yield str(message_chunk.content)
-                return
-            except Exception as e:
-                logger.warning(f"Multimodal streaming failed: {str(e)}, falling back")
-                yield f"抱歉，处理图片时出现错误：{str(e)}"
+        # 根据不同提供商处理图片格式
+        if self.provider == "openai":
+            return {
+                "type": "image_url",
+                "image_url": {"url": image_data.get("url") or f"data:{image_data.get('mime_type', 'image/jpeg')};base64,{image_data.get('base64')}"},
+            }
+        elif self.provider == "claude":
+            return {
+                "type": "image",
+                "source": {"type": "base64", "media_type": image_data.get("mime_type", "image/jpeg"), "data": image_data.get("base64")},
+            }
         else:
-            # 不支持多模态的提供商
-            yield f"当前使用的 {self.provider} 提供商暂不支持图片分析功能。"
+            # 默认格式
+            return {
+                "type": "image",
+                "source": {"type": "base64", "media_type": image_data.get("mime_type", "image/jpeg"), "data": image_data.get("base64")},
+            }
 
     def _estimate_token_usage(self, prompt: str, completion: str) -> Dict[str, int]:
         """
