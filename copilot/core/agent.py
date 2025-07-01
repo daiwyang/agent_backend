@@ -3,6 +3,8 @@
 """
 
 from typing import Any, AsyncGenerator, Dict, List, Optional
+import traceback
+import asyncio
 
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.checkpoint.memory import MemorySaver
@@ -86,8 +88,8 @@ class CoreAgent:
         # 创建Agent实例
         return cls(provider=provider, model_name=model_name, tools=tools, mcp_tools=mcp_tools, **llm_kwargs)
 
-    @staticmethod
-    async def _get_mcp_tools() -> List:
+    @classmethod
+    async def _get_mcp_tools(cls) -> List:
         """获取所有可用的MCP工具"""
         try:
             # 获取所有注册的MCP服务器配置
@@ -105,17 +107,10 @@ class CoreAgent:
                 # 转换为langchain-mcp-adapters格式
                 if "command" in server_config and server_config["command"]:
                     # Stdio 服务器配置
-                    mcp_config[server["id"]] = {
-                        "command": server_config["command"], 
-                        "args": server_config.get("args", []), 
-                        "transport": "stdio"
-                    }
+                    mcp_config[server["id"]] = {"command": server_config["command"], "args": server_config.get("args", []), "transport": "stdio"}
                 elif "url" in server_config and server_config["url"]:
                     # HTTP/SSE 服务器配置
-                    mcp_config[server["id"]] = {
-                        "url": server_config["url"], 
-                        "transport": "streamable_http"
-                    }
+                    mcp_config[server["id"]] = {"url": server_config["url"], "transport": "streamable_http"}
                 else:
                     logger.warning(f"Invalid server config for {server['id']}: missing valid command or url")
 
@@ -125,13 +120,93 @@ class CoreAgent:
 
             # 使用MultiServerMCPClient获取工具
             client = MultiServerMCPClient(mcp_config)
-            tools = await client.get_tools()
-            logger.info(f"Successfully loaded {len(tools)} MCP tools via langchain-mcp-adapters")
-            return tools
+            try:
+                # 异步获取所有MCP工具
+                all_tools = await client.get_tools()
+
+                logger.info(f"Successfully loaded {len(all_tools)} MCP tools via langchain-mcp-adapters")
+
+                # 包装所有MCP工具以集成权限检查和自定义逻辑
+                wrapped_tools = [cls._wrap_mcp_tool(tool) for tool in all_tools]
+                logger.info(f"Successfully wrapped {len(wrapped_tools)} MCP tools")
+
+                return wrapped_tools
+
+            except ExceptionGroup as eg:
+                # 特别处理TaskGroup的异常
+                logger.error(f"Error group calling client.get_tools(): {eg}")
+                for i, e in enumerate(eg.exceptions):
+                    logger.error(f"  Sub-exception {i+1}: {e}")
+                    logger.debug(traceback.format_exc())
+                return []
+            except Exception as e:
+                logger.error(f"Error calling client.get_tools(): {e}")
+                # 打印详细的traceback以诊断TaskGroup问题
+                logger.debug(traceback.format_exc())
+                # 即使出错也返回空列表，避免整个agent崩溃
+                return []
 
         except Exception as e:
             logger.error(f"Failed to load MCP tools via langchain-mcp-adapters: {e}")
+            logger.debug(traceback.format_exc())
             return []
+
+    @staticmethod
+    def _wrap_mcp_tool(tool: Any) -> Any:
+        """
+        包装从 langchain-mcp-adapters 获取的工具，以注入自定义逻辑，
+        例如权限检查和统一的日志记录。
+        """
+        # 保存原始的执行函数
+        original_arun = tool._arun
+
+        async def custom_arun(*args, **kwargs) -> Any:
+            """
+            自定义的工具执行逻辑。
+            1. 从参数中提取 session_id。
+            2. 调用我们自己的 mcp_server_manager.call_tool 来执行工具，
+               这样可以利用其中已实现的权限检查、日志和结构化返回。
+            3. 处理返回结果，使其符合 LangChain 的期望。
+            """
+            session_id = None
+            tool_input = args[0] if args else {}
+
+            # LangGraph 将配置信息（包括session_id）放在kwargs的'config'键中
+            config = kwargs.get("config", {})
+            if config and "configurable" in config:
+                session_id = config["configurable"].get("session_id")
+
+            logger.info(f"Executing wrapped tool: {tool.name} with session_id: {session_id}")
+
+            try:
+                # 使用 mcp_server_manager.call_tool 来执行，它包含权限逻辑
+                result = await mcp_server_manager.call_tool(
+                    tool_name=tool.name, parameters=tool_input, session_id=session_id, require_permission=True  # 强制进行权限检查
+                )
+
+                if result.get("success"):
+                    # 返回处理后的文本，或者可以根据需要返回更复杂的结构化输出
+                    processed_text = result.get("result", {}).get("processed_text", "")
+                    logger.info(f"Wrapped tool {tool.name} executed successfully. Output: {processed_text[:100]}...")
+                    return processed_text
+                else:
+                    error_msg = result.get("error", "Unknown error")
+                    result_msg = result.get("result", "")
+                    logger.error(f"Wrapped tool {tool.name} failed: {error_msg} - {result_msg}")
+                    # 向LLM返回一个清晰的错误信息
+                    return f"Tool execution failed: {error_msg}. Reason: {result_msg}"
+
+            except Exception as e:
+                logger.error(f"Exception in wrapped tool {tool.name}: {e}")
+                logger.debug(traceback.format_exc())
+                return f"An unexpected error occurred while executing the tool: {str(e)}"
+
+        # 替换原始的异步执行函数
+        # ainvoke 会调用 _arun, 所以我们只需要包装 _arun
+        tool._arun = custom_arun
+        
+        logger.debug(f"Wrapped tool: {tool.name}")
+        return tool
 
     async def chat(
         self,
@@ -183,8 +258,9 @@ class CoreAgent:
     async def _build_inputs(self, message: str, images: Optional[List], session_id: Optional[str], enable_tools: bool) -> Dict:
         """构建输入消息"""
         # 处理MCP工具的session_id注入
-        if session_id and enable_tools and self.enable_mcp_tools:
-            message = f"[SESSION_ID:{session_id}] {message}"
+        # 注意：现在通过包装器注入session_id，这里的代码可能需要调整或移除
+        # if session_id and enable_tools and self.enable_mcp_tools:
+        #     message = f"[SESSION_ID:{session_id}] {message}"
 
         # 构建消息内容
         if images and self._supports_multimodal():
@@ -335,5 +411,3 @@ class CoreAgent:
     def get_token_calculator(self) -> TokenCalculator:
         """获取token计算器实例"""
         return TokenCalculator()
-
-

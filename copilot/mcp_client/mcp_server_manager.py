@@ -142,33 +142,51 @@ class MCPServerManager:
             Dict: {"success": bool, "result": Any, "error": str}
         """
         try:
+            logger.info(f"Attempting to call tool '{tool_name}' with parameters: {parameters}")
+
             # 解析工具名称
             full_tool_name = self._resolve_tool_name(tool_name)
             if not full_tool_name:
+                logger.warning(f"Tool resolution failed for name: '{tool_name}'")
                 return {"success": False, "error": f"Tool not found: {tool_name}", "result": None}
+
+            logger.info(f"Resolved tool name '{tool_name}' to '{full_tool_name}'")
 
             tool_info = self.tools_index[full_tool_name]
             server_id, actual_tool_name = full_tool_name.split("::", 1)
 
             # 权限检查
             if require_permission and session_id:
-                if not await self._check_permission(session_id, tool_info, parameters):
-                    return {"success": False, "error": "Permission denied or request timed out", "result": None, "permission_required": True}
+                logger.info(f"Requesting permission for tool '{full_tool_name}' in session '{session_id}'")
+                permission_granted = await self._check_permission(session_id, tool_info, parameters)
+                if not permission_granted:
+                    # 当用户明确拒绝时，返回一个结构化的错误信息
+                    # 这使得Agent可以捕获此特定情况并做出相应处理
+                    logger.warning(f"Permission denied by user for tool '{full_tool_name}' in session '{session_id}'")
+                    return {
+                        "success": False,
+                        "error": "tool_permission_denied",
+                        "result": "用户拒绝了工具的执行请求。",
+                        "permission_required": True,
+                    }
+                logger.info(f"Permission granted for tool '{full_tool_name}' in session '{session_id}'")
 
             # 直接使用 FastMCP Client 调用工具
             client = self.servers[server_id]["client"]
+            logger.info(f"Executing tool '{full_tool_name}' via server '{server_id}'")
 
             async with client:
                 result = await client.call_tool(actual_tool_name, parameters)
 
-                # 处理 FastMCP 结果格式
-                processed_result = self._process_tool_result(result)
+                # 优化点：返回结构化结果，而不是直接处理成字符串
+                # Agent可以根据需要自行决定如何处理原始输出
+                processed_result = {"raw_output": result, "processed_text": self._process_tool_result(result)}
 
                 logger.info(f"Tool executed successfully: {full_tool_name}")
                 return {"success": True, "result": processed_result, "error": None}
 
         except Exception as e:
-            logger.error(f"Error calling tool {tool_name}: {e}")
+            logger.error(f"Error calling tool {tool_name}: {e}\n{traceback.format_exc()}")
             return {"success": False, "error": str(e), "result": None}
 
     def get_available_tools(self) -> List[Dict[str, Any]]:
