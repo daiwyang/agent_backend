@@ -79,6 +79,10 @@ class CoreAgent:
         # 获取MCP工具
         mcp_tools = await cls._get_mcp_tools()
 
+        logger.info(
+            f"Creating CoreAgent with provider: {provider}, model: {model_name}, tools: {len(tools) if tools else 0}, mcp_tools: {len(mcp_tools)}"
+        )
+
         # 创建Agent实例
         return cls(provider=provider, model_name=model_name, tools=tools, mcp_tools=mcp_tools, **llm_kwargs)
 
@@ -99,10 +103,21 @@ class CoreAgent:
                 server_config = mcp_server_manager.servers[server["id"]]["config"]
 
                 # 转换为langchain-mcp-adapters格式
-                if "command" in server_config:
-                    mcp_config[server["id"]] = {"command": server_config["command"], "args": server_config.get("args", []), "transport": "stdio"}
-                elif "url" in server_config:
-                    mcp_config[server["id"]] = {"url": server_config["url"], "transport": "streamable_http"}
+                if "command" in server_config and server_config["command"]:
+                    # Stdio 服务器配置
+                    mcp_config[server["id"]] = {
+                        "command": server_config["command"], 
+                        "args": server_config.get("args", []), 
+                        "transport": "stdio"
+                    }
+                elif "url" in server_config and server_config["url"]:
+                    # HTTP/SSE 服务器配置
+                    mcp_config[server["id"]] = {
+                        "url": server_config["url"], 
+                        "transport": "streamable_http"
+                    }
+                else:
+                    logger.warning(f"Invalid server config for {server['id']}: missing valid command or url")
 
             if not mcp_config:
                 logger.info("No valid MCP server configurations found")
@@ -320,3 +335,5 @@ class CoreAgent:
     def get_token_calculator(self) -> TokenCalculator:
         """获取token计算器实例"""
         return TokenCalculator()
+
+

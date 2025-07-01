@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from copilot.mcp_client.mcp_server_manager import mcp_server_manager
 from copilot.mcp_client.tool_permission_manager import tool_permission_manager
 from copilot.utils.auth import get_current_user_from_state
+from copilot.utils.logger import logger
 
 router = APIRouter(prefix="/mcp")
 
@@ -69,12 +70,39 @@ async def get_connected_servers(current_user: dict = Depends(get_current_user_fr
         raise HTTPException(status_code=500, detail=f"获取服务器列表失败: {str(e)}")
 
 
+@router.post("/refresh")
+async def refresh_mcp_tools(current_user: dict = Depends(get_current_user_from_state)):
+    """手动刷新聊天服务中的 MCP 工具"""
+    try:
+        # 直接调用ChatService的reload_agent方法
+        from copilot.router.chat_router import get_chat_service
+        chat_service = await get_chat_service()
+        success = await chat_service.reload_agent()
+        
+        if success:
+            return {"success": True, "message": "MCP 工具已成功刷新"}
+        else:
+            raise HTTPException(status_code=500, detail="刷新 MCP 工具失败")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"刷新 MCP 工具失败: {str(e)}")
+
+
 @router.post("/servers/connect")
 async def connect_server(server_config: MCPServerConfig, current_user: dict = Depends(get_current_user_from_state)):
     """连接到MCP服务器"""
     try:
         success = await mcp_server_manager.register_server(server_config.model_dump())
         if success:
+            # MCP服务器连接成功后，重新加载ChatService中的agent以获取最新工具
+            try:
+                from copilot.router.chat_router import get_chat_service
+                chat_service = await get_chat_service()
+                await chat_service.reload_agent()
+                logger.info(f"Successfully reloaded agent after connecting server: {server_config.name}")
+            except Exception as reload_error:
+                logger.error(f"Failed to reload agent after server connection: {str(reload_error)}")
+                # 不影响连接结果，只记录警告
+            
             return {"success": True, "message": f"成功连接到服务器: {server_config.name}"}
         else:
             raise HTTPException(status_code=400, detail="连接服务器失败")
@@ -88,6 +116,16 @@ async def disconnect_server(server_id: str, current_user: dict = Depends(get_cur
     try:
         success = await mcp_server_manager.unregister_server(server_id)
         if success:
+            # MCP服务器断开成功后，重新加载ChatService中的agent以移除相关工具
+            try:
+                from copilot.router.chat_router import get_chat_service
+                chat_service = await get_chat_service()
+                await chat_service.reload_agent()
+                logger.info(f"Successfully reloaded agent after disconnecting server: {server_id}")
+            except Exception as reload_error:
+                logger.error(f"Failed to reload agent after server disconnection: {str(reload_error)}")
+                # 不影响断开结果，只记录警告
+            
             return {"success": True, "message": f"成功断开服务器连接: {server_id}"}
         else:
             raise HTTPException(status_code=400, detail="断开服务器连接失败")

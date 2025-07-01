@@ -4,7 +4,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, AsyncGenerator, Dict, List
+from typing import Any, Dict, List
 
 from copilot.core.agent import CoreAgent
 from copilot.core.session_manager import SessionInfo, session_manager
@@ -47,7 +47,7 @@ class ChatService:
         self._chat_history_manager = None
 
     @classmethod
-    async def create(cls, provider: str = None, model_name: str = None, tools: List = None, enable_mcp: bool = True, **llm_kwargs):
+    async def create(cls, provider: str = None, model_name: str = None, tools: List = None, **llm_kwargs):
         """
         异步创建ChatService实例
 
@@ -58,10 +58,7 @@ class ChatService:
             enable_mcp: 是否启用MCP工具
             **llm_kwargs: 传递给LLM的额外参数
         """
-        if enable_mcp:
-            core_agent = await CoreAgent.create_with_mcp_tools(provider=provider, model_name=model_name, tools=tools, **llm_kwargs)
-        else:
-            core_agent = CoreAgent(provider=provider, model_name=model_name, tools=tools, **llm_kwargs)
+        core_agent = await CoreAgent.create_with_mcp_tools(provider=provider, model_name=model_name, tools=tools, **llm_kwargs)
 
         return cls(core_agent)
 
@@ -471,3 +468,37 @@ class ChatService:
         except Exception as e:
             logger.error(f"Error getting message {message_id} for user {user_id}: {str(e)}")
             return None
+
+    async def reload_agent(self) -> bool:
+        """
+        重新加载 agent（重新创建以获取最新的 MCP 工具）
+        
+        当 MCP server 连接/断开时，由 mcp_router 调用此方法来刷新 agent
+        
+        Returns:
+            bool: 是否成功重新创建 agent
+        """
+        try:
+            logger.info("Reloading agent to refresh MCP tools")
+            
+            # 保存当前配置
+            provider = self.core_agent.provider
+            model_name = self.core_agent.model_name
+            
+            # 重新创建 agent
+            new_agent = await CoreAgent.create_with_mcp_tools(
+                provider=provider,
+                model_name=model_name
+            )
+            
+            # 替换当前的 agent
+            old_tool_count = len(self.core_agent.mcp_tools)
+            self.core_agent = new_agent
+            new_tool_count = len(self.core_agent.mcp_tools)
+            
+            logger.info(f"Successfully reloaded agent: MCP tools {old_tool_count} -> {new_tool_count}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to reload agent: {str(e)}")
+            return False

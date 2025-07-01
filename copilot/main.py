@@ -29,6 +29,11 @@ async def lifespan(app: FastAPI):
         # 启动MCP管理器
         await mcp_server_manager.start()
         logger.info("MCP server manager started")
+
+        # 初始化聊天服务
+        from copilot.router.chat_router import get_chat_service
+        await get_chat_service()
+        logger.info("Chat service initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize connection pools: {str(e)}")
         raise

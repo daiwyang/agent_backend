@@ -26,20 +26,35 @@ from copilot.service.chat_service import ChatService
 from copilot.service.stats_service import StatsService
 from copilot.utils.auth import get_current_user_from_state
 from copilot.utils.error_codes import ErrorCodes, ErrorHandler, raise_chat_error, raise_system_error, raise_validation_error
+from copilot.utils.logger import logger
 
-# 创建全局服务实例
-chat_service = ChatService()
+# 全局服务实例（延迟初始化）
+chat_service = None
 stats_service = StatsService()
 
 # FastAPI应用
 router = APIRouter(prefix="/chat")
 
 
+async def get_chat_service():
+    """获取聊天服务实例，如果未初始化则先初始化"""
+    global chat_service
+    if chat_service is None:
+        try:
+            chat_service = await ChatService.create()
+            logger.info("ChatService initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize ChatService: {str(e)}")
+            raise
+    return chat_service
+
+
 @router.get("/providers")
 async def get_providers():
     """获取可用的LLM提供商信息"""
     try:
-        return {"current_provider": chat_service.get_provider_info(), "available_providers": chat_service.get_available_providers()}
+        service = await get_chat_service()
+        return {"current_provider": service.get_provider_info(), "available_providers": service.get_available_providers()}
     except Exception as e:
         raise_system_error(f"获取提供商信息失败: {str(e)}")
 
@@ -53,9 +68,10 @@ async def switch_provider(provider: str, model: Optional[str] = None, current_us
         if not user_id:
             raise_validation_error("用户ID缺失")
 
-        success = chat_service.switch_provider(provider, model)
+        service = await get_chat_service()
+        success = service.switch_provider(provider, model)
         if success:
-            return {"success": True, "message": f"成功切换到提供商: {provider}", "provider_info": chat_service.get_provider_info()}
+            return {"success": True, "message": f"成功切换到提供商: {provider}", "provider_info": service.get_provider_info()}
         else:
             raise_chat_error(f"切换提供商失败: {provider}")
 
@@ -74,7 +90,8 @@ async def create_session(request: CreateSessionRequestWithAuth, current_user: di
         if not user_id:
             raise_validation_error("用户ID缺失")
 
-        session_id = await chat_service.create_session(user_id, request.window_id)
+        service = await get_chat_service()
+        session_id = await service.create_session(user_id, request.window_id)
         session = await session_manager.get_session(session_id)
 
         return CreateSessionResponse(session_id=session_id, user_id=session.user_id, window_id=session.window_id, thread_id=session.thread_id)
@@ -131,7 +148,8 @@ async def _generate_stream_response(request: ChatRequest):
         message_ids = None
 
         # 使用统一的流式聊天方法
-        async for chunk in chat_service.chat(
+        service = await get_chat_service()
+        async for chunk in service.chat(
             session_id=request.session_id, message=request.message, attachments=request.attachments, enable_tools=request.enable_mcp_tools
         ):
             if "error" in chunk:
@@ -172,7 +190,8 @@ async def get_chat_history(
 ):
     """获取会话的聊天历史"""
     try:
-        messages = await chat_service.get_chat_history(session_id)
+        service = await get_chat_service()
+        messages = await service.get_chat_history(session_id)
 
         # 应用分页
         total_count = len(messages)
@@ -305,7 +324,8 @@ async def get_chat_stats(current_user: dict = Depends(get_current_user_from_stat
 async def delete_session(session_id: str, archive: bool = Query(True, description="是否归档到数据库")):
     """删除会话"""
     try:
-        await chat_service.delete_session(session_id)
+        service = await get_chat_service()
+        await service.delete_session(session_id)
         return {"message": f"Session deleted successfully (archived: {archive})"}
     except Exception as e:
         raise ErrorHandler.handle_system_error(e, "删除会话")
@@ -320,7 +340,8 @@ async def get_message_by_id(message_id: str, current_user: dict = Depends(get_cu
             raise_validation_error("用户ID缺失")
 
         # 获取消息详情
-        message = await chat_service.get_message_by_id(message_id, user_id)
+        service = await get_chat_service()
+        message = await service.get_message_by_id(message_id, user_id)
 
         if not message:
             raise_validation_error("消息不存在或无权限访问")
