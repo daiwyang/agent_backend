@@ -10,6 +10,7 @@ from fastmcp.client.transports import StreamableHttpTransport
 
 from copilot.mcp_client.tool_permission_manager import tool_permission_manager
 from copilot.utils.logger import logger
+import traceback
 
 
 class MCPServerManager:
@@ -100,6 +101,7 @@ class MCPServerManager:
 
         except Exception as e:
             logger.error(f"Failed to register server {server_id}: {e}")
+            logger.debug(traceback.format_exc())
             return False
 
     async def unregister_server(self, server_id: str) -> bool:
@@ -195,7 +197,7 @@ class MCPServerManager:
         """根据配置创建 FastMCP Client"""
 
         # HTTP/SSE 服务器
-        if "url" in config:
+        if "url" in config and config["url"]:
             url = config["url"]
             timeout = config.get("timeout", 30.0)
 
@@ -215,11 +217,11 @@ class MCPServerManager:
                 return Client(url, timeout=timeout)
 
         # 本地脚本
-        elif "script" in config:
+        elif "script" in config and config["script"]:
             return Client(config["script"])
 
         # Stdio 命令
-        elif "command" in config:
+        elif "command" in config and config["command"]:
             mcp_config = {
                 "mcpServers": {
                     config["id"]: {
@@ -234,9 +236,9 @@ class MCPServerManager:
             return Client(mcp_config)
 
         # 完整 MCP 配置
-        elif "transport" in config:
-            mcp_config = {"mcpServers": {config["id"]: {k: v for k, v in config.items() if k not in ["id", "name", "tool_risks"]}}}
-            return Client(mcp_config)
+        # elif "transport" in config:
+        #     mcp_config = {"mcpServers": {config["id"]: {k: v for k, v in config.items() if k not in ["id", "name", "tool_risks"]}}}
+        #     return Client(mcp_config)
 
         else:
             raise ValueError(f"Invalid server configuration")
@@ -254,7 +256,7 @@ class MCPServerManager:
                 tools = {}
                 tool_risks = config.get("tool_risks", {})
 
-                for tool in tools_response.tools:
+                for tool in tools_response:
                     tools[tool.name] = {
                         "name": tool.name,
                         "description": tool.description or "",
