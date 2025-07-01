@@ -8,7 +8,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 
 from copilot.core.llm_factory import LLMFactory
-from copilot.mcp.mcp_server_manager import mcp_server_manager
+from copilot.mcp_client.mcp_server_manager import mcp_server_manager
 from copilot.utils.logger import logger
 from copilot.utils.token_calculator import TokenCalculator
 

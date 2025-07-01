@@ -10,7 +10,7 @@ import os
 # 添加项目路径
 sys.path.append('/data/agent_backend')
 
-from copilot.mcp.mcp_server_manager import mcp_server_manager
+from copilot.mcp_client.mcp_server_manager import mcp_server_manager
 
 
 async def test_basic_functionality():

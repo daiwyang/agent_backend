@@ -5,7 +5,7 @@ MCP 工具执行同意管理器
 
 import asyncio
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -33,7 +33,7 @@ class ToolExecutionRequest:
         self.tool_description = tool_description
         self.parameters = parameters
         self.risk_level = risk_level
-        self.created_at = datetime.now(datetime.UTC)  # 使用UTC时间
+        self.created_at = datetime.now(UTC)  # 使用UTC时间
         self.status = ToolPermissionStatus.PENDING
         self.user_response = None
         self.expiry_time = self.created_at + timedelta(minutes=5)  # 5分钟过期
@@ -175,7 +175,7 @@ class ToolPermissionManager:
             return False
 
         # 检查请求是否过期
-        if datetime.now(datetime.UTC) > request.expiry_time:
+        if datetime.now(UTC) > request.expiry_time:
             request.status = ToolPermissionStatus.EXPIRED
             logger.warning(f"Tool permission request expired: {request_id}")
             return False
@@ -199,7 +199,7 @@ class ToolPermissionManager:
             if (
                 request.session_id == session_id
                 and request.status == ToolPermissionStatus.PENDING
-                and datetime.now(datetime.UTC) <= request.expiry_time
+                and datetime.now(UTC) <= request.expiry_time
             ):
                 requests.append(request.to_dict())
         return requests
@@ -239,7 +239,7 @@ class ToolPermissionManager:
         """定期清理过期的请求"""
         while True:
             try:
-                current_time = datetime.utcnow()
+                current_time = datetime.now(UTC)
                 expired_requests = []
 
                 for request_id, request in self.pending_requests.items():

@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
-from copilot.mcp.tool_permission_manager import tool_permission_manager
+from copilot.mcp_client.tool_permission_manager import tool_permission_manager
 from copilot.utils.logger import logger
 
 

@@ -7,14 +7,12 @@ from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from copilot.mcp_client.mcp_server_manager import mcp_server_manager
 from copilot.middleware.auth_middleware import authentication_middleware
-from copilot.router import chat_router, user_router
-from copilot.router import mcp_router, websocket_router
+from copilot.router import chat_router, mcp_router, user_router, websocket_router
 from copilot.utils.logger import logger
 from copilot.utils.mongo_client import get_mongo_manager
 from copilot.utils.redis_client import close_redis, init_redis
-from copilot.mcp.mcp_server_manager import mcp_server_manager
-from copilot.mcp.tool_permission_manager import tool_permission_manager
 
 
 @asynccontextmanager
@@ -45,7 +43,7 @@ async def lifespan(app: FastAPI):
 
         await close_redis()
         logger.info("Redis connections closed")
-        
+
         # 停止MCP管理器
         await mcp_server_manager.stop()
         logger.info("MCP server manager stopped")

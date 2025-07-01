@@ -8,7 +8,7 @@ from typing import Dict, Set
 from fastapi import WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
-from copilot.mcp.tool_permission_manager import tool_permission_manager
+from copilot.mcp_client.tool_permission_manager import tool_permission_manager
 from copilot.utils.logger import logger
 from copilot.utils.redis_client import redis_client
 

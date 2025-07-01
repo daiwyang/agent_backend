@@ -7,8 +7,8 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from copilot.mcp.mcp_server_manager import mcp_server_manager
-from copilot.mcp.tool_permission_manager import tool_permission_manager
+from copilot.mcp_client.mcp_server_manager import mcp_server_manager
+from copilot.mcp_client.tool_permission_manager import tool_permission_manager
 from copilot.utils.auth import get_current_user_from_state
 
 router = APIRouter(prefix="/mcp")
