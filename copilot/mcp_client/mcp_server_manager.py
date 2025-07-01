@@ -3,6 +3,7 @@ MCP Server 管理器 - 基于 FastMCP Client API 的轻量级封装
 直接使用 fastmcp Client，最小化中间层，专注于业务逻辑
 """
 
+import traceback
 from typing import Any, Dict, List, Optional
 
 from fastmcp import Client
@@ -10,7 +11,6 @@ from fastmcp.client.transports import StreamableHttpTransport
 
 from copilot.mcp_client.tool_permission_manager import tool_permission_manager
 from copilot.utils.logger import logger
-import traceback
 
 
 class MCPServerManager:
@@ -73,7 +73,7 @@ class MCPServerManager:
 
         try:
             if server_id in self.servers:
-                logger.error(f"Server already registered: {server_id}")
+                logger.warning(f"Server already registered: {server_id}")
                 return False
 
             if not self._validate_config(server_config):

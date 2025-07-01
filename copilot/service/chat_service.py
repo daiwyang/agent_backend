@@ -36,18 +36,34 @@ class ChatResponse:
 class ChatService:
     """会话服务 - 组合CoreAgent和会话管理，支持多个LLM提供商"""
 
-    def __init__(self, provider: str = None, model_name: str = None, tools: List = None, **llm_kwargs):
+    def __init__(self, core_agent: CoreAgent):
         """
         初始化ChatService
+
+        Args:
+            core_agent: 已创建的CoreAgent实例
+        """
+        self.core_agent = core_agent
+        self._chat_history_manager = None
+
+    @classmethod
+    async def create(cls, provider: str = None, model_name: str = None, tools: List = None, enable_mcp: bool = True, **llm_kwargs):
+        """
+        异步创建ChatService实例
 
         Args:
             provider: LLM提供商 (deepseek, openai, claude, moonshot, zhipu, qwen, gemini)
             model_name: 模型名称
             tools: 工具列表
+            enable_mcp: 是否启用MCP工具
             **llm_kwargs: 传递给LLM的额外参数
         """
-        self.core_agent = CoreAgent(provider=provider, model_name=model_name, tools=tools, **llm_kwargs)
-        self._chat_history_manager = None
+        if enable_mcp:
+            core_agent = await CoreAgent.create_with_mcp_tools(provider=provider, model_name=model_name, tools=tools, **llm_kwargs)
+        else:
+            core_agent = CoreAgent(provider=provider, model_name=model_name, tools=tools, **llm_kwargs)
+
+        return cls(core_agent)
 
     @property
     def chat_history_manager(self):

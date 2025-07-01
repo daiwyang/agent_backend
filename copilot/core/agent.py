@@ -4,6 +4,7 @@
 
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
+from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 
@@ -16,19 +17,21 @@ from copilot.utils.token_calculator import TokenCalculator
 class CoreAgent:
     """核心Agent - 支持多个LLM提供商和MCP工具"""
 
-    def __init__(self, provider: Optional[str] = None, model_name: Optional[str] = None, tools: List = None, **llm_kwargs):
+    def __init__(self, provider: Optional[str] = None, model_name: Optional[str] = None, tools: List = None, mcp_tools: List = None, **llm_kwargs):
         """
         初始化Agent
 
         Args:
             provider: LLM提供商 (deepseek, openai, claude, moonshot, zhipu, qwen, gemini)
             model_name: 模型名称
-            tools: 工具列表
+            tools: 传统工具列表
+            mcp_tools: MCP工具列表（从外部传入）
             **llm_kwargs: 传递给LLM的额外参数
         """
         self.provider = provider
         self.model_name = model_name
         self.tools = tools or []
+        self.mcp_tools = mcp_tools or []
         self.llm_kwargs = llm_kwargs
         self.memory = MemorySaver()
         self.enable_mcp_tools = True  # 启用MCP工具支持
@@ -53,32 +56,67 @@ class CoreAgent:
         """合并传统工具和MCP工具"""
         merged_tools = self.tools.copy()
 
-        if self.enable_mcp_tools:
-            # 添加MCP工具包装器
-            mcp_tools = self._create_mcp_tool_wrappers()
-            merged_tools.extend(mcp_tools)
+        if self.enable_mcp_tools and self.mcp_tools:
+            merged_tools.extend(self.mcp_tools)
+            logger.info(f"Added {len(self.mcp_tools)} MCP tools to agent")
 
         return merged_tools
 
-    def _create_mcp_tool_wrappers(self) -> List:
-        """创建MCP工具的LangChain包装器"""
-        wrappers = []
+    @classmethod
+    async def create_with_mcp_tools(cls, provider: Optional[str] = None, model_name: Optional[str] = None, tools: List = None, **llm_kwargs):
+        """
+        异步创建带有MCP工具的Agent
 
-        # 获取所有可用的MCP工具
-        available_tools = mcp_server_manager.get_available_tools()
+        Args:
+            provider: LLM提供商
+            model_name: 模型名称
+            tools: 传统工具列表
+            **llm_kwargs: 传递给LLM的额外参数
 
-        for tool_info in available_tools:
-            # 创建工具函数
-            async def mcp_tool_func(session_id: str, **kwargs):
-                return await mcp_server_manager.call_tool(
-                    tool_name=tool_info["full_name"], parameters=kwargs, session_id=session_id, require_permission=True
-                )
+        Returns:
+            CoreAgent: 配置了MCP工具的Agent实例
+        """
+        # 获取MCP工具
+        mcp_tools = await cls._get_mcp_tools()
 
-            # 这里需要创建LangChain工具包装器
-            # 具体实现取决于LangChain的工具接口
-            # wrappers.append(create_langchain_tool(tool_info, mcp_tool_func))
+        # 创建Agent实例
+        return cls(provider=provider, model_name=model_name, tools=tools, mcp_tools=mcp_tools, **llm_kwargs)
 
-        return wrappers
+    @staticmethod
+    async def _get_mcp_tools() -> List:
+        """获取所有可用的MCP工具"""
+        try:
+            # 获取所有注册的MCP服务器配置
+            servers_info = mcp_server_manager.get_servers_info()
+
+            if not servers_info:
+                logger.info("No MCP servers registered")
+                return []
+
+            # 构建MultiServerMCPClient配置
+            mcp_config = {}
+            for server in servers_info:
+                server_config = mcp_server_manager.servers[server["id"]]["config"]
+
+                # 转换为langchain-mcp-adapters格式
+                if "command" in server_config:
+                    mcp_config[server["id"]] = {"command": server_config["command"], "args": server_config.get("args", []), "transport": "stdio"}
+                elif "url" in server_config:
+                    mcp_config[server["id"]] = {"url": server_config["url"], "transport": "streamable_http"}
+
+            if not mcp_config:
+                logger.info("No valid MCP server configurations found")
+                return []
+
+            # 使用MultiServerMCPClient获取工具
+            client = MultiServerMCPClient(mcp_config)
+            tools = await client.get_tools()
+            logger.info(f"Successfully loaded {len(tools)} MCP tools via langchain-mcp-adapters")
+            return tools
+
+        except Exception as e:
+            logger.error(f"Failed to load MCP tools via langchain-mcp-adapters: {e}")
+            return []
 
     async def chat(
         self,
@@ -101,15 +139,22 @@ class CoreAgent:
         Yields:
             str: 响应片段
         """
-        # 1. 准备配置
-        config = self._prepare_config(thread_id, session_id)
+        # 设置当前会话ID，供MCP工具使用
+        self._current_session_id = session_id
 
-        # 2. 构建输入消息
-        inputs = await self._build_inputs(message, images, session_id, enable_tools)
+        try:
+            # 1. 准备配置
+            config = self._prepare_config(thread_id, session_id)
 
-        # 3. 使用流式输出
-        async for chunk in self._chat_stream_internal(inputs, config):
-            yield chunk
+            # 2. 构建输入消息
+            inputs = await self._build_inputs(message, images, session_id, enable_tools)
+
+            # 3. 使用流式输出
+            async for chunk in self._chat_stream_internal(inputs, config):
+                yield chunk
+        finally:
+            # 清理会话ID
+            self._current_session_id = None
 
     def _prepare_config(self, thread_id: Optional[str], session_id: Optional[str]) -> Dict:
         """准备LangGraph配置"""
@@ -136,6 +181,8 @@ class CoreAgent:
         else:
             # 纯文本输入
             content = message
+
+        logger.debug(f"Prepared input content: {content}")
 
         return {"messages": [{"role": "user", "content": content}]}
 

@@ -108,12 +108,7 @@ async def chat(
         return StreamingResponse(
             _generate_stream_response(request),
             media_type="text/plain",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-                "Content-Encoding": "identity",
-            },
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no", "Content-Encoding": "identity"},
         )
 
     except ValueError as e:
@@ -132,23 +127,18 @@ async def _generate_stream_response(request: ChatRequest):
         start_data = json.dumps({"type": "start", "session_id": request.session_id}) + "\n"
         yield start_data.encode("utf-8")
 
-        response_content = ""
         content_buffer = ""
         message_ids = None
 
         # 使用统一的流式聊天方法
         async for chunk in chat_service.chat(
-            session_id=request.session_id,
-            message=request.message,
-            attachments=request.attachments,
-            enable_tools=request.enable_mcp_tools,
+            session_id=request.session_id, message=request.message, attachments=request.attachments, enable_tools=request.enable_mcp_tools
         ):
             if "error" in chunk:
                 error_data = json.dumps({"type": "error", "content": chunk["error"]}) + "\n"
                 yield error_data.encode("utf-8")
                 return
             elif "content" in chunk:
-                response_content += chunk["content"]
                 content_buffer += chunk["content"]
 
                 # 当缓冲区达到一定大小或遇到标点符号时发送数据
@@ -166,7 +156,7 @@ async def _generate_stream_response(request: ChatRequest):
             yield content_data.encode("utf-8")
 
         # 发送结束事件
-        end_data = json.dumps({"type": "end", "session_id": request.session_id, "message_ids": message_ids, "total_content": response_content}) + "\n"
+        end_data = json.dumps({"type": "end", "session_id": request.session_id, "message_ids": message_ids}) + "\n"
         yield end_data.encode("utf-8")
 
     except Exception as e:
