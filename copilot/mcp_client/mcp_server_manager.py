@@ -9,7 +9,6 @@ from typing import Any, Dict, List, Optional
 from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
-from copilot.mcp_client.tool_permission_manager import tool_permission_manager
 from copilot.utils.logger import logger
 
 
@@ -31,16 +30,13 @@ class MCPServerManager:
 
     async def start(self):
         """启动MCP服务器管理器"""
-        await tool_permission_manager.start()
-        logger.info("MCPServerManager started with FastMCP")
+        logger.info("MCPServerManager started")
 
     async def stop(self):
         """停止MCP服务器管理器"""
-        # 清理所有服务器
+        # 断开所有服务器连接
         for server_id in list(self.servers.keys()):
             await self.unregister_server(server_id)
-
-        await tool_permission_manager.stop()
         logger.info("MCPServerManager stopped")
 
     async def register_server(self, server_config: Dict[str, Any]) -> bool:
@@ -312,23 +308,29 @@ class MCPServerManager:
         else:
             return None
 
+    async def _get_tool_info(self, tool_name: str) -> Optional[Dict[str, Any]]:
+        """获取工具信息"""
+        full_tool_name = self._resolve_tool_name(tool_name)
+        if full_tool_name and full_tool_name in self.tools_index:
+            return self.tools_index[full_tool_name]
+        return None
+
     async def _check_permission(self, session_id: str, tool_info: Dict[str, Any], parameters: Dict[str, Any]) -> bool:
-        """检查工具权限"""
+        """
+        简化的权限检查 - 只对低风险工具直接放行
+        中高风险工具需要通过Agent的状态管理器处理
+        """
         risk_level = tool_info.get("risk_level", "medium")
 
         # 低风险工具直接放行
         if risk_level == "low":
+            logger.info(f"Low-risk tool '{tool_info['name']}' approved automatically")
             return True
 
-        # 中高风险工具需要用户确认
-        return await tool_permission_manager.request_tool_permission(
-            session_id=session_id,
-            tool_name=tool_info["name"],
-            tool_description=tool_info["description"],
-            parameters=parameters,
-            risk_level=risk_level,
-            timeout=300,
-        )
+        # 中高风险工具需要权限确认
+        # 在新架构下，这些工具应该通过Agent的状态管理器处理
+        logger.warning(f"Medium/high-risk tool '{tool_info['name']}' requires permission (should be handled by Agent)")
+        return False
 
     def _process_tool_result(self, result: Any) -> Any:
         """处理 FastMCP 工具调用结果"""

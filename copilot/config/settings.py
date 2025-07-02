@@ -24,7 +24,7 @@ def load_yaml_config() -> dict:
     if not os.path.exists(config_path):
         raise FileNotFoundError(f"配置文件 {config_path} 不存在")
 
-    with open(config_path, "r") as f:
+    with open(config_path, "r", encoding="utf-8") as f:
         conf = yaml.load(f, yaml.FullLoader)
     return conf
 

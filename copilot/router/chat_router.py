@@ -50,28 +50,47 @@ async def get_chat_service():
 
 
 @router.get("/providers")
-async def get_providers():
+async def get_providers(session_id: Optional[str] = Query(None, description="会话ID，获取特定会话的提供商信息")):
     """获取可用的LLM提供商信息"""
     try:
         service = await get_chat_service()
-        return {"current_provider": service.get_provider_info(), "available_providers": service.get_available_providers()}
+        current_provider = await service.get_provider_info(session_id=session_id)
+        available_providers = service.get_available_providers()
+
+        return {"current_provider": current_provider, "available_providers": available_providers, "session_id": session_id}
     except Exception as e:
         raise_system_error(f"获取提供商信息失败: {str(e)}")
 
 
 @router.post("/providers/switch")
-async def switch_provider(provider: str, model: Optional[str] = None, current_user: dict = Depends(get_current_user_from_state)):
-    """切换LLM提供商"""
+async def switch_provider(provider: str, session_id: str, model: Optional[str] = None, current_user: dict = Depends(get_current_user_from_state)):
+    """为指定会话切换LLM提供商"""
     try:
-        # 验证用户权限（可以根据需要添加管理员检查）
+        # 验证用户权限
         user_id = current_user.get("user_id")
         if not user_id:
             raise_validation_error("用户ID缺失")
 
+        # 验证session属于当前用户
+        session = await session_manager.get_session(session_id)
+        if session is None:
+            raise_chat_error(ErrorCodes.CHAT_SESSION_NOT_FOUND, "会话不存在")
+
+        if session.user_id != user_id:
+            raise_chat_error(ErrorCodes.CHAT_PERMISSION_DENIED, "无权访问此会话")
+
         service = await get_chat_service()
-        success = service.switch_provider(provider, model)
+        success = await service.switch_provider(session_id=session_id, provider=provider, model_name=model)
+
         if success:
-            return {"success": True, "message": f"成功切换到提供商: {provider}", "provider_info": service.get_provider_info()}
+            # 获取更新后的提供商信息
+            provider_info = await service.get_provider_info(session_id=session_id)
+            return {
+                "success": True,
+                "message": f"成功为会话 {session_id} 切换到提供商: {provider}",
+                "session_id": session_id,
+                "provider_info": provider_info,
+            }
         else:
             raise_chat_error(f"切换提供商失败: {provider}")
 

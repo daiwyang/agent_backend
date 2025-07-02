@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 
 from copilot.mcp_client.mcp_server_manager import mcp_server_manager
 from copilot.middleware.auth_middleware import authentication_middleware
-from copilot.router import chat_router, mcp_router, user_router, websocket_router
+from copilot.router import chat_router, mcp_router, user_router, websocket_router, agent_management_router
 from copilot.utils.logger import logger
 from copilot.utils.mongo_client import get_mongo_manager
 from copilot.utils.redis_client import close_redis, init_redis
@@ -29,6 +29,16 @@ async def lifespan(app: FastAPI):
         # 启动MCP管理器
         await mcp_server_manager.start()
         logger.info("MCP server manager started")
+
+        # 启动Agent状态管理器
+        from copilot.core.agent_state_manager import agent_state_manager
+        await agent_state_manager.start()
+        logger.info("Agent state manager started")
+
+        # 启动Agent管理器
+        from copilot.core.agent_manager import agent_manager
+        await agent_manager.start()
+        logger.info("Agent manager started")
 
         # 初始化聊天服务
         from copilot.router.chat_router import get_chat_service
@@ -52,6 +62,16 @@ async def lifespan(app: FastAPI):
         # 停止MCP管理器
         await mcp_server_manager.stop()
         logger.info("MCP server manager stopped")
+
+        # 停止Agent状态管理器
+        from copilot.core.agent_state_manager import agent_state_manager
+        await agent_state_manager.stop()
+        logger.info("Agent state manager stopped")
+
+        # 停止Agent管理器
+        from copilot.core.agent_manager import agent_manager
+        await agent_manager.stop()
+        logger.info("Agent manager stopped")
     except Exception as e:
         logger.warning(f"Error closing connections: {str(e)}")
 
@@ -62,6 +82,7 @@ app.include_router(chat_router.router, prefix="/agent_backend", tags=["agent_bac
 app.include_router(user_router.router, prefix="/agent_backend", tags=["用户管理"])
 app.include_router(mcp_router.router, prefix="/agent_backend", tags=["MCP工具"])
 app.include_router(websocket_router.router, prefix="/agent_backend", tags=["WebSocket"])
+app.include_router(agent_management_router.router, prefix="/agent_backend", tags=["Agent管理"])
 
 # 添加CORS中间件
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])

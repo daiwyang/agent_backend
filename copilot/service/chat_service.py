@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any, Dict, List
 
 from copilot.core.agent import CoreAgent
+from copilot.core.agent_manager import agent_manager
 from copilot.core.session_manager import SessionInfo, session_manager
 from copilot.utils.logger import logger
 from copilot.utils.token_calculator import TokenCalculator, TokenUsage
@@ -34,17 +35,16 @@ class ChatResponse:
 
 
 class ChatService:
-    """会话服务 - 组合CoreAgent和会话管理，支持多个LLM提供商"""
+    """会话服务 - 基于Agent管理器，为每个会话提供独立的Agent实例"""
 
-    def __init__(self, core_agent: CoreAgent):
-        """
-        初始化ChatService
-
-        Args:
-            core_agent: 已创建的CoreAgent实例
-        """
-        self.core_agent = core_agent
+    def __init__(self):
+        """初始化ChatService"""
         self._chat_history_manager = None
+        # 默认的Agent配置
+        self.default_provider = None
+        self.default_model_name = None
+        self.default_tools = None
+        self.default_llm_kwargs = {}
 
     @classmethod
     async def create(cls, provider: str = None, model_name: str = None, tools: List = None, **llm_kwargs):
@@ -52,15 +52,19 @@ class ChatService:
         异步创建ChatService实例
 
         Args:
-            provider: LLM提供商 (deepseek, openai, claude, moonshot, zhipu, qwen, gemini)
-            model_name: 模型名称
-            tools: 工具列表
-            enable_mcp: 是否启用MCP工具
+            provider: 默认LLM提供商 (deepseek, openai, claude, moonshot, zhipu, qwen, gemini)
+            model_name: 默认模型名称
+            tools: 默认工具列表
             **llm_kwargs: 传递给LLM的额外参数
         """
-        core_agent = await CoreAgent.create_with_mcp_tools(provider=provider, model_name=model_name, tools=tools, **llm_kwargs)
-
-        return cls(core_agent)
+        service = cls()
+        service.default_provider = provider
+        service.default_model_name = model_name
+        service.default_tools = tools or []
+        service.default_llm_kwargs = llm_kwargs
+        
+        logger.info(f"ChatService created with default provider: {provider}, model: {model_name}")
+        return service
 
     @property
     def chat_history_manager(self):
@@ -75,20 +79,72 @@ class ChatService:
         """创建新的对话会话"""
         return await session_manager.create_session(user_id, window_id)
 
-    def get_provider_info(self) -> Dict[str, Any]:
+    async def get_agent_for_session(
+        self, 
+        session_id: str, 
+        provider: str = None, 
+        model_name: str = None,
+        tools: List = None,
+        **llm_kwargs
+    ) -> CoreAgent:
         """
-        获取当前使用的提供商信息
+        为指定会话获取Agent实例
+        
+        Args:
+            session_id: 会话ID
+            provider: LLM提供商（可选，默认使用服务默认配置）
+            model_name: 模型名称（可选）
+            tools: 工具列表（可选）
+            **llm_kwargs: LLM参数（可选）
+            
+        Returns:
+            CoreAgent: 该会话的专用Agent实例
+        """
+        # 使用传入的参数或默认配置
+        effective_provider = provider or self.default_provider
+        effective_model_name = model_name or self.default_model_name
+        effective_tools = tools if tools is not None else self.default_tools
+        effective_kwargs = {**self.default_llm_kwargs, **llm_kwargs}
+        
+        return await agent_manager.get_agent(
+            session_id=session_id,
+            provider=effective_provider,
+            model_name=effective_model_name,
+            tools=effective_tools,
+            **effective_kwargs
+        )
+
+    async def get_provider_info(self, session_id: str = None) -> Dict[str, Any]:
+        """
+        获取提供商信息
+
+        Args:
+            session_id: 会话ID（可选，用于获取特定会话的Agent信息）
 
         Returns:
             Dict[str, Any]: 提供商信息
         """
-        return self.core_agent.get_provider_info()
+        if session_id:
+            try:
+                agent = await self.get_agent_for_session(session_id)
+                return agent.get_provider_info()
+            except Exception as e:
+                logger.warning(f"Failed to get agent info for session {session_id}: {e}")
+        
+        # 返回默认配置信息
+        from copilot.core.llm_factory import LLMFactory
+        return {
+            "provider": self.default_provider,
+            "model": self.default_model_name,
+            "available_providers": LLMFactory.get_available_providers()
+        }
 
-    def switch_provider(self, provider: str, model_name: str = None, **llm_kwargs) -> bool:
+    async def switch_provider(self, session_id: str, provider: str, model_name: str = None, **llm_kwargs) -> bool:
         """
-        切换LLM提供商
+        为指定会话切换LLM提供商
 
         Args:
+            session_id: 会话ID
             provider: 新的提供商
             model_name: 新的模型名称
             **llm_kwargs: 传递给LLM的额外参数
@@ -96,7 +152,24 @@ class ChatService:
         Returns:
             bool: 是否切换成功
         """
-        return self.core_agent.switch_provider(provider, model_name, **llm_kwargs)
+        try:
+            # 移除旧的Agent实例，下次调用时会用新配置创建
+            await agent_manager.remove_agent(session_id)
+            
+            # 获取新的Agent实例（会使用新配置创建）
+            agent = await self.get_agent_for_session(
+                session_id=session_id,
+                provider=provider,
+                model_name=model_name,
+                **llm_kwargs
+            )
+            
+            logger.info(f"Successfully switched provider for session {session_id} to {provider}/{model_name}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to switch provider for session {session_id}: {e}")
+            return False
 
     def get_available_providers(self) -> Dict[str, Any]:
         """
@@ -148,12 +221,17 @@ class ChatService:
     async def _chat_stream_internal(
         self, session_info: SessionInfo, message: str, images: List[dict], enable_tools: bool, attachments: List[dict] = None
     ):
-        """内部流式聊天方法"""
+        """内部流式聊天方法 - 使用会话专用的Agent实例"""
         try:
             full_response = ""
 
-            # 使用核心Agent进行流式聊天
-            async for content in self.core_agent.chat(
+            # 获取该会话专用的Agent实例
+            agent = await self.get_agent_for_session(session_info.session_id)
+            
+            logger.debug(f"Using agent for session {session_info.session_id}: {agent.provider}/{agent.model_name}")
+
+            # 使用会话专用Agent进行流式聊天
+            async for content in agent.chat(
                 message=message,
                 thread_id=session_info.thread_id,
                 session_id=session_info.session_id,
@@ -166,7 +244,7 @@ class ChatService:
 
             # 计算token使用量并保存对话
             if full_response:
-                token_usage = self.core_agent._estimate_token_usage(message, full_response)
+                token_usage = agent._estimate_token_usage(message, full_response)
                 message_ids = await self._save_conversation(session_info.session_id, message, full_response, token_usage, attachments)
 
                 # 返回最终统计信息
@@ -469,36 +547,44 @@ class ChatService:
             logger.error(f"Error getting message {message_id} for user {user_id}: {str(e)}")
             return None
 
-    async def reload_agent(self) -> bool:
+    async def reload_agent(self, session_id: str = None) -> bool:
         """
         重新加载 agent（重新创建以获取最新的 MCP 工具）
         
         当 MCP server 连接/断开时，由 mcp_router 调用此方法来刷新 agent
         
+        Args:
+            session_id: 指定会话ID，如果为None则重新加载所有Agent实例
+        
         Returns:
             bool: 是否成功重新创建 agent
         """
         try:
-            logger.info("Reloading agent to refresh MCP tools")
+            logger.info(f"Reloading agents to refresh MCP tools for session: {session_id or 'all'}")
             
-            # 保存当前配置
-            provider = self.core_agent.provider
-            model_name = self.core_agent.model_name
-            
-            # 重新创建 agent
-            new_agent = await CoreAgent.create_with_mcp_tools(
-                provider=provider,
-                model_name=model_name
-            )
-            
-            # 替换当前的 agent
-            old_tool_count = len(self.core_agent.mcp_tools)
-            self.core_agent = new_agent
-            new_tool_count = len(self.core_agent.mcp_tools)
-            
-            logger.info(f"Successfully reloaded agent: MCP tools {old_tool_count} -> {new_tool_count}")
-            return True
+            if session_id:
+                # 重新加载指定会话的Agent
+                success = await agent_manager.remove_agent(session_id)
+                if success:
+                    logger.info(f"Successfully removed agent for session {session_id}, will recreate on next request")
+                    return True
+                else:
+                    logger.warning(f"No agent found to remove for session {session_id}")
+                    return True  # 没有Agent也算成功，下次请求时会创建新的
+            else:
+                # 重新加载所有Agent实例
+                stats_before = agent_manager.get_agent_stats()
+                
+                # 清除所有Agent实例，它们会在下次请求时重新创建
+                # 这里我们通过重启Agent管理器来实现
+                await agent_manager.stop()
+                await agent_manager.start()
+                
+                stats_after = agent_manager.get_agent_stats()
+                
+                logger.info(f"Successfully reloaded all agents: {stats_before['total_agents']} -> {stats_after['total_agents']}")
+                return True
             
         except Exception as e:
-            logger.error(f"Failed to reload agent: {str(e)}")
+            logger.error(f"Failed to reload agent for session {session_id}: {str(e)}")
             return False

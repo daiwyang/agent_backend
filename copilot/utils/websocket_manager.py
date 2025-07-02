@@ -1,5 +1,5 @@
 """
-WebSocket处理器 - 用于实时通知和工具权限确认
+WebSocket处理器 - 用于实时通知和Agent执行状态管理
 """
 
 import json
@@ -8,7 +8,6 @@ from typing import Dict, Set
 from fastapi import WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
-from copilot.mcp_client.tool_permission_manager import tool_permission_manager
 from copilot.utils.logger import logger
 from copilot.utils.redis_client import redis_client
 
@@ -106,28 +105,49 @@ async def handle_websocket_message(websocket: WebSocket, session_id: str, messag
         msg_type = message.get("type")
         data = message.get("data", {})
 
-        if msg_type == "tool_permission_response":
-            # 处理工具权限响应
-            request_id = data.get("request_id")
+        if msg_type == "agent_tool_permission_response":
+            # 处理Agent工具权限响应
+            execution_id = data.get("execution_id")
             approved = data.get("approved", False)
-
-            success = await tool_permission_manager.handle_user_response(request_id=request_id, approved=approved, session_id=session_id)
-
+            
+            # 导入agent_state_manager
+            from copilot.core.agent_state_manager import agent_state_manager
+            
+            success = await agent_state_manager.handle_permission_response(
+                session_id=session_id,
+                execution_id=execution_id,
+                approved=approved
+            )
+            
             # 发送确认
-            response = {"type": "tool_permission_response_ack", "data": {"request_id": request_id, "success": success, "approved": approved}}
+            response = {
+                "type": "agent_tool_permission_response_ack",
+                "data": {
+                    "execution_id": execution_id,
+                    "success": success,
+                    "approved": approved
+                }
+            }
             await websocket.send_text(json.dumps(response))
 
-        elif msg_type == "get_pending_permissions":
-            # 获取待处理的权限请求
-            pending_requests = await tool_permission_manager.get_pending_requests(session_id)
-
-            response = {"type": "pending_permissions", "data": {"requests": pending_requests}}
+        elif msg_type == "get_agent_status":
+            # 获取Agent执行状态
+            from copilot.core.agent_state_manager import agent_state_manager
+            
+            status = agent_state_manager.get_session_status(session_id)
+            response = {"type": "agent_status", "data": {"status": status}}
             await websocket.send_text(json.dumps(response))
 
         elif msg_type == "ping":
             # 心跳检测
             response = {"type": "pong", "data": {"timestamp": data.get("timestamp")}}
             await websocket.send_text(json.dumps(response))
+        
+        else:
+            # 未知消息类型
+            logger.warning(f"Unknown WebSocket message type: {msg_type}")
+            error_response = {"type": "error", "data": {"message": f"Unknown message type: {msg_type}"}}
+            await websocket.send_text(json.dumps(error_response))
 
     except Exception as e:
         logger.error(f"Error handling WebSocket message: {e}")

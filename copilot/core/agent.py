@@ -154,55 +154,91 @@ class CoreAgent:
     @staticmethod
     def _wrap_mcp_tool(tool: Any) -> Any:
         """
-        包装从 langchain-mcp-adapters 获取的工具，以注入自定义逻辑，
-        例如权限检查和统一的日志记录。
+        包装从 langchain-mcp-adapters 获取的工具，集成Agent状态管理器
+        实现非阻塞的权限检查机制
         """
         # 保存原始的执行函数
         original_arun = tool._arun
 
         async def custom_arun(*args, **kwargs) -> Any:
             """
-            自定义的工具执行逻辑。
-            1. 从参数中提取 session_id。
-            2. 调用我们自己的 mcp_server_manager.call_tool 来执行工具，
-               这样可以利用其中已实现的权限检查、日志和结构化返回。
-            3. 处理返回结果，使其符合 LangChain 的期望。
+            自定义的工具执行逻辑 - 集成Agent状态管理器
             """
             session_id = None
-            tool_input = args[0] if args else {}
-
-            # LangGraph 将配置信息（包括session_id）放在kwargs的'config'键中
+            
+            # 从kwargs中获取session_id - 修正提取逻辑
             config = kwargs.get("config", {})
-            if config and "configurable" in config:
+            if config and isinstance(config, dict) and "configurable" in config:
                 session_id = config["configurable"].get("session_id")
+            
+            # 确保config参数存在
+            if "config" not in kwargs:
+                kwargs["config"] = {}
 
             logger.info(f"Executing wrapped tool: {tool.name} with session_id: {session_id}")
+            logger.debug(f"Tool {tool.name} called with args: {args}, kwargs keys: {list(kwargs.keys())}")
 
             try:
-                # 使用 mcp_server_manager.call_tool 来执行，它包含权限逻辑
-                result = await mcp_server_manager.call_tool(
-                    tool_name=tool.name, parameters=tool_input, session_id=session_id, require_permission=True  # 强制进行权限检查
-                )
-
-                if result.get("success"):
-                    # 返回处理后的文本，或者可以根据需要返回更复杂的结构化输出
-                    processed_text = result.get("result", {}).get("processed_text", "")
-                    logger.info(f"Wrapped tool {tool.name} executed successfully. Output: {processed_text[:100]}...")
-                    return processed_text
-                else:
-                    error_msg = result.get("error", "Unknown error")
-                    result_msg = result.get("result", "")
-                    logger.error(f"Wrapped tool {tool.name} failed: {error_msg} - {result_msg}")
-                    # 向LLM返回一个清晰的错误信息
-                    return f"Tool execution failed: {error_msg}. Reason: {result_msg}"
+                # 导入agent_state_manager以避免循环导入
+                from copilot.core.agent_state_manager import agent_state_manager
+                
+                # 获取工具信息以确定风险级别
+                tool_info = await mcp_server_manager._get_tool_info(tool.name)
+                risk_level = tool_info.get("risk_level", "medium") if tool_info else "medium"
+                
+                # 权限检查逻辑
+                if risk_level in ["medium", "high"] and session_id:
+                    # 检查是否已经有权限确认
+                    context = agent_state_manager.get_execution_context(session_id)
+                    if context and hasattr(context, 'pending_tool_permissions'):
+                        # 检查是否已经确认过这个工具
+                        tool_key = f"{tool.name}_{hash(str(args))}"
+                        if tool_key not in context.pending_tool_permissions:
+                            # 需要权限确认，创建权限请求
+                            async def tool_callback():
+                                # 在回调中执行原始工具调用，确保传递config
+                                return await original_arun(*args, **kwargs)
+                            
+                            # 提取参数用于显示（尽力而为）
+                            display_params = {}
+                            if args:
+                                if isinstance(args[0], dict):
+                                    display_params = args[0]
+                                else:
+                                    display_params = {"input": str(args[0])}
+                            
+                            should_continue = await agent_state_manager.request_tool_permission(
+                                session_id=session_id,
+                                tool_name=tool.name,
+                                parameters=display_params,
+                                callback=tool_callback,
+                                risk_level=risk_level
+                            )
+                            
+                            if not should_continue:
+                                return f"🔒 等待用户确认执行工具: {tool.name}"
+                
+                # 权限已确认或低风险工具，直接调用原始工具
+                logger.debug(f"Calling original tool {tool.name} with config: {kwargs.get('config', {})}")
+                result = await original_arun(*args, **kwargs)
+                logger.info(f"Tool {tool.name} executed successfully")
+                return result
 
             except Exception as e:
                 logger.error(f"Exception in wrapped tool {tool.name}: {e}")
                 logger.debug(traceback.format_exc())
-                return f"An unexpected error occurred while executing the tool: {str(e)}"
+                
+                # 如果包装器出错，尝试确保config参数并重试
+                try:
+                    if "config" not in kwargs:
+                        kwargs["config"] = {}
+                    logger.warning(f"Falling back to original tool call for {tool.name}")
+                    return await original_arun(*args, **kwargs)
+                except Exception as orig_e:
+                    logger.error(f"Original tool call also failed: {orig_e}")
+                    return f"Tool execution failed: {str(orig_e)}"
 
         # 替换原始的异步执行函数
-        # ainvoke 会调用 _arun, 所以我们只需要包装 _arun
         tool._arun = custom_arun
         
         logger.debug(f"Wrapped tool: {tool.name}")
@@ -217,7 +253,7 @@ class CoreAgent:
         enable_tools: bool = True,
     ):
         """
-        统一的流式聊天接口，支持多模态、工具调用
+        统一的流式聊天接口，支持多模态、工具调用和权限确认
 
         Args:
             message: 用户消息
@@ -233,6 +269,16 @@ class CoreAgent:
         self._current_session_id = session_id
 
         try:
+            # 导入agent_state_manager和AgentExecutionState
+            from copilot.core.agent_state_manager import agent_state_manager, AgentExecutionState
+            
+            # 创建或获取执行上下文
+            if session_id:
+                context = agent_state_manager.get_execution_context(session_id)
+                if not context:
+                    context = agent_state_manager.create_execution_context(session_id, thread_id)
+                context.update_state(AgentExecutionState.RUNNING)
+
             # 1. 准备配置
             config = self._prepare_config(thread_id, session_id)
 
@@ -240,8 +286,9 @@ class CoreAgent:
             inputs = await self._build_inputs(message, images, session_id, enable_tools)
 
             # 3. 使用流式输出
-            async for chunk in self._chat_stream_internal(inputs, config):
+            async for chunk in self._chat_stream_with_permission_handling(inputs, config, session_id):
                 yield chunk
+                
         finally:
             # 清理会话ID
             self._current_session_id = None
@@ -280,6 +327,42 @@ class CoreAgent:
     def _supports_multimodal(self) -> bool:
         """检查当前提供商是否支持多模态"""
         return self.provider in ["openai", "claude", "gemini"]
+
+    async def _chat_stream_with_permission_handling(self, inputs: Dict, config: Dict, session_id: Optional[str]) -> AsyncGenerator[str, None]:
+        """带权限处理的流式聊天方法"""
+        try:
+            from copilot.core.agent_state_manager import agent_state_manager, AgentExecutionState
+            
+            # 第一阶段：正常执行直到遇到权限确认
+            async for chunk in self._chat_stream_internal(inputs, config):
+                # 检查是否遇到权限确认请求
+                if "🔒 等待用户确认执行工具:" in str(chunk):
+                    yield chunk
+                    
+                    # 如果有session_id，等待权限确认
+                    if session_id:
+                        context = agent_state_manager.get_execution_context(session_id)
+                        if context and context.state == AgentExecutionState.WAITING_PERMISSION:
+                            yield "\n\n⏳ 请在聊天界面中确认是否允许执行此工具...\n"
+                            
+                            # 等待用户权限确认
+                            permission_granted = await agent_state_manager.wait_for_permission(session_id, timeout=300)
+                            
+                            if permission_granted:
+                                yield "✅ 权限已确认，继续执行...\n"
+                                # 继续执行 - 这里可能需要重新调用Agent或恢复执行
+                                # 由于权限确认后工具已经在回调中执行，这里主要是状态同步
+                                context.update_state(AgentExecutionState.COMPLETED)
+                            else:
+                                yield "❌ 权限被拒绝或超时，执行已停止。\n"
+                                context.update_state(AgentExecutionState.PAUSED)
+                                break
+                else:
+                    yield chunk
+                    
+        except Exception as e:
+            logger.error(f"Error in chat_stream_with_permission_handling: {str(e)}")
+            yield f"处理请求时出现错误: {str(e)}"
 
     async def _chat_stream_internal(self, inputs: Dict, config: Dict) -> AsyncGenerator[str, None]:
         """内部流式聊天方法"""
@@ -411,3 +494,138 @@ class CoreAgent:
     def get_token_calculator(self) -> TokenCalculator:
         """获取token计算器实例"""
         return TokenCalculator()
+
+    async def update_mcp_tools(self, mcp_tools: List) -> bool:
+        """
+        动态更新Agent的MCP工具
+        
+        Args:
+            mcp_tools: 新的MCP工具列表
+            
+        Returns:
+            bool: 是否更新成功
+        """
+        try:
+            # 更新MCP工具列表
+            self.mcp_tools = mcp_tools
+            
+            # 重新合并所有工具
+            all_tools = self._merge_tools()
+            
+            # 重新创建LangGraph agent
+            self.graph = create_react_agent(
+                self.llm, 
+                tools=all_tools, 
+                prompt="You are a helpful assistant. Please respond in Chinese.", 
+                checkpointer=self.memory
+            )
+            
+            logger.info(f"Successfully updated Agent with {len(mcp_tools)} MCP tools")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to update MCP tools: {e}")
+            return False
+    
+    async def reload_mcp_tools_from_servers(self, server_ids: List[str]) -> bool:
+        """
+        从指定服务器重新加载MCP工具
+        
+        Args:
+            server_ids: MCP服务器ID列表
+            
+        Returns:
+            bool: 是否重新加载成功
+        """
+        try:
+            # 获取指定服务器的MCP工具
+            mcp_tools = await self._get_mcp_tools_for_servers(server_ids)
+            
+            # 更新工具
+            return await self.update_mcp_tools(mcp_tools)
+            
+        except Exception as e:
+            logger.error(f"Failed to reload MCP tools from servers {server_ids}: {e}")
+            return False
+    
+    @classmethod 
+    async def _get_mcp_tools_for_servers(cls, server_ids: List[str]) -> List:
+        """
+        从指定MCP服务器获取工具
+        
+        Args:
+            server_ids: MCP服务器ID列表
+            
+        Returns:
+            List: 包装后的MCP工具列表
+        """
+        try:
+            from copilot.mcp_client.mcp_server_manager import mcp_server_manager
+            
+            if not server_ids:
+                return []
+            
+            # 获取所有服务器信息
+            servers_info = mcp_server_manager.get_servers_info()
+            
+            # 过滤出指定的服务器
+            target_servers = [
+                server for server in servers_info 
+                if server["id"] in server_ids
+            ]
+            
+            if not target_servers:
+                logger.info(f"No matching MCP servers found for IDs: {server_ids}")
+                return []
+            
+            # 构建MultiServerMCPClient配置
+            mcp_config = {}
+            for server in target_servers:
+                server_config = mcp_server_manager.servers[server["id"]]["config"]
+                
+                # 转换为langchain-mcp-adapters格式
+                if "command" in server_config and server_config["command"]:
+                    # Stdio 服务器配置
+                    mcp_config[server["id"]] = {
+                        "command": server_config["command"], 
+                        "args": server_config.get("args", []), 
+                        "transport": "stdio"
+                    }
+                elif "url" in server_config and server_config["url"]:
+                    # HTTP/SSE 服务器配置
+                    mcp_config[server["id"]] = {
+                        "url": server_config["url"], 
+                        "transport": "streamable_http"
+                    }
+                else:
+                    logger.warning(f"Invalid server config for {server['id']}: missing valid command or url")
+            
+            if not mcp_config:
+                logger.info("No valid MCP server configurations found for specified servers")
+                return []
+            
+            # 使用MultiServerMCPClient获取工具
+            from langchain_mcp_adapters.client import MultiServerMCPClient
+            client = MultiServerMCPClient(mcp_config)
+            
+            try:
+                # 异步获取所有MCP工具
+                all_tools = await client.get_tools()
+                
+                logger.info(f"Successfully loaded {len(all_tools)} MCP tools from servers: {server_ids}")
+                
+                # 包装所有MCP工具以集成权限检查和自定义逻辑
+                wrapped_tools = [cls._wrap_mcp_tool(tool) for tool in all_tools]
+                logger.info(f"Successfully wrapped {len(wrapped_tools)} MCP tools from specified servers")
+                
+                return wrapped_tools
+                
+            except Exception as e:
+                logger.error(f"Error calling client.get_tools() for servers {server_ids}: {e}")
+                logger.debug(traceback.format_exc())
+                return []
+                
+        except Exception as e:
+            logger.error(f"Failed to load MCP tools from servers {server_ids}: {e}")
+            logger.debug(traceback.format_exc())
+            return []
