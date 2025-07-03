@@ -19,7 +19,8 @@ class AuthenticationMiddleware:
             "/agent_backend/user/profile",  # 用户信息管理需要认证
             "/agent_backend/user/update",  # 用户信息更新需要认证
             "/agent_backend/user/me",  # 获取当前用户信息需要认证
-            "/agent_backend/mcp",  # 用户登出需要认证
+            "/agent_backend/mcp",  # MCP相关接口需要认证
+            "/agent_backend/api/sse",  # SSE相关接口需要认证
         ]
 
         # 定义公开路径（不需要认证）
@@ -45,26 +46,35 @@ class AuthenticationMiddleware:
         # 检查是否为需要保护的路径
         if any(path.startswith(protected_path) for protected_path in self.protected_paths):
             logger.debug(f"Path {path} requires authentication")
-            # 获取Authorization header
-            authorization = request.headers.get("Authorization")
-            logger.debug(f"Authorization header: {authorization[:50] if authorization else 'None'}...")
 
-            if not authorization:
-                logger.warning(f"Missing authorization header for path: {path}")
-                return JSONResponse(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    content={"code": 401, "message": "缺少认证信息", "detail": "请提供有效的Authorization header"},
-                )
+            # 对于SSE路径，优先从查询参数获取token
+            token = None
+            if path.startswith("/agent_backend/api/sse"):
+                token = request.query_params.get("token")
+                if token:
+                    logger.debug(f"Found token in query params for SSE: {token[:6]}...{token[-6:]}")
 
-            # 验证Bearer token格式
-            if not authorization.startswith("Bearer "):
-                return JSONResponse(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    content={"code": 401, "message": "无效的认证格式", "detail": "Authorization header必须使用Bearer格式"},
-                )
+            # 如果没有从查询参数获取到token，则从Authorization header获取
+            if not token:
+                authorization = request.headers.get("Authorization")
+                logger.debug(f"Authorization header: {authorization[:50] if authorization else 'None'}...")
 
-            # 提取token
-            token = authorization.split(" ")[1] if len(authorization.split(" ")) == 2 else None
+                if not authorization:
+                    logger.warning(f"Missing authorization header for path: {path}")
+                    return JSONResponse(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        content={"code": 401, "message": "缺少认证信息", "detail": "请提供有效的Authorization header或token查询参数"},
+                    )
+
+                # 验证Bearer token格式
+                if not authorization.startswith("Bearer "):
+                    return JSONResponse(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        content={"code": 401, "message": "无效的认证格式", "detail": "Authorization header必须使用Bearer格式"},
+                    )
+
+                # 提取token
+                token = authorization.split(" ")[1] if len(authorization.split(" ")) == 2 else None
 
             if not token:
                 return JSONResponse(

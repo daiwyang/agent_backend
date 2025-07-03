@@ -126,6 +126,12 @@ class RedisClient:
         return await client.set(key, value, ex=ex, nx=nx)
 
     @redis_error_handler
+    async def setex(self, key: str, time: int, value: Union[str, bytes]) -> bool:
+        """设置键值并指定过期时间（秒）"""
+        client = self._ensure_initialized()
+        return await client.setex(key, time, value)
+
+    @redis_error_handler
     async def delete(self, *keys: str) -> int:
         """删除键"""
         client = self._ensure_initialized()
@@ -255,6 +261,18 @@ class RedisClient:
             await pipe.expire(key, ex)
             results = await pipe.execute()
             return results[0]
+
+    # === 发布订阅操作 ===
+    @redis_error_handler
+    async def publish(self, channel: str, message: Union[str, bytes]) -> int:
+        """发布消息到指定频道"""
+        client = self._ensure_initialized()
+        return await client.publish(channel, message)
+
+    def pubsub(self, **kwargs):
+        """创建发布订阅对象"""
+        client = self._ensure_initialized()
+        return client.pubsub(**kwargs)
 
 
 # 全局单例实例

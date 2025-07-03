@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from copilot.core.tool_result_processor import ToolResultProcessor
-from copilot.core.websocket_notifier import WebSocketNotifier
+from copilot.core.simple_notifier import SimpleNotifier
 from copilot.mcp_client.mcp_server_manager import mcp_server_manager
 from copilot.utils.logger import logger
 
@@ -194,7 +194,7 @@ class MCPToolWrapper:
             tool_execution_info = {
                 "tool_name": tool.name,
                 "session_id": session_id,
-                "parameters": WebSocketNotifier.extract_tool_parameters(args),
+                "parameters": SimpleNotifier.extract_tool_parameters(args),
                 "start_time": datetime.now(UTC).isoformat(),
             }
 
@@ -209,7 +209,7 @@ class MCPToolWrapper:
 
                 # 通知前端工具开始执行
                 if session_id:
-                    await WebSocketNotifier.notify_tool_execution_start(session_id, tool_execution_info)
+                    await SimpleNotifier.notify_tool_execution_start(session_id, tool_execution_info)
 
                 # 权限检查逻辑
                 if risk_level in ["medium", "high"] and session_id:
@@ -226,7 +226,7 @@ class MCPToolWrapper:
                                 
                                 # 通知前端工具执行完成
                                 if session_id:
-                                    await WebSocketNotifier.notify_tool_execution_complete(
+                                    await SimpleNotifier.notify_tool_execution_complete(
                                         session_id, tool_execution_info, raw_result, success=True
                                     )
                                 
@@ -252,7 +252,7 @@ class MCPToolWrapper:
                             if not should_continue:
                                 # 通知前端等待权限确认
                                 if session_id:
-                                    await WebSocketNotifier.notify_tool_waiting_permission(session_id, tool_execution_info)
+                                    await SimpleNotifier.notify_tool_waiting_permission(session_id, tool_execution_info)
                                 return f"🔒 等待用户确认执行工具: {tool.name}"
 
                 # 权限已确认或低风险工具，直接调用原始工具
@@ -262,7 +262,7 @@ class MCPToolWrapper:
                 
                 # 通知前端工具执行完成
                 if session_id:
-                    await WebSocketNotifier.notify_tool_execution_complete(
+                    await SimpleNotifier.notify_tool_execution_complete(
                         session_id, tool_execution_info, raw_result, success=True
                     )
                 
@@ -275,7 +275,7 @@ class MCPToolWrapper:
 
                 # 通知前端工具执行失败
                 if session_id:
-                    await WebSocketNotifier.notify_tool_execution_complete(
+                    await SimpleNotifier.notify_tool_execution_complete(
                         session_id, tool_execution_info, str(e), success=False
                     )
 
@@ -288,7 +288,7 @@ class MCPToolWrapper:
                     
                     # 通知前端重试成功
                     if session_id:
-                        await WebSocketNotifier.notify_tool_execution_complete(
+                        await SimpleNotifier.notify_tool_execution_complete(
                             session_id, tool_execution_info, raw_result, success=True
                         )
                     
@@ -298,7 +298,7 @@ class MCPToolWrapper:
                     
                     # 通知前端最终失败
                     if session_id:
-                        await WebSocketNotifier.notify_tool_execution_complete(
+                        await SimpleNotifier.notify_tool_execution_complete(
                             session_id, tool_execution_info, str(orig_e), success=False
                         )
                     
