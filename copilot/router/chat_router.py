@@ -19,6 +19,9 @@ from copilot.model.chat_model import (
     SearchRequest,
     SearchResult,
     SessionInfo,
+    PermissionResponseRequest,
+    ToolPermissionRequestMessage,
+    ToolExecutionStatusMessage,
 )
 
 # 导入简化的服务
@@ -143,8 +146,14 @@ async def chat(
         # 始终返回流式响应
         return StreamingResponse(
             _generate_stream_response(request),
-            media_type="text/plain",
-            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no", "Content-Encoding": "identity"},
+            media_type="application/x-ndjson",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+                "Content-Encoding": "identity",
+                "Transfer-Encoding": "chunked"
+            },
         )
 
     except ValueError as e:
@@ -178,12 +187,25 @@ async def _generate_stream_response(request: ChatRequest):
             elif "content" in chunk:
                 content_buffer += chunk["content"]
 
-                # 当缓冲区达到一定大小或遇到标点符号时发送数据
-                if len(content_buffer) >= 5 or any(char in content_buffer for char in "，。！？；：\n"):
+                # 优化缓冲策略：更频繁的刷新以获得更好的实时体验
+                if len(content_buffer) >= 3 or any(char in content_buffer for char in "，。！？；：\n ") or content_buffer.endswith(" "):
                     content_data = json.dumps({"type": "content", "content": content_buffer}) + "\n"
                     yield content_data.encode("utf-8")
                     content_buffer = ""
                     await asyncio.sleep(0)
+
+                    # 检查并发送StreamNotifier的待发送消息
+                    from copilot.core.stream_notifier import StreamNotifier
+
+                    pending_messages = StreamNotifier.get_pending_messages(request.session_id)
+                    for message in pending_messages:
+                        try:
+                            stream_data = message.to_json_string() + "\n"
+                            yield stream_data.encode("utf-8")
+                            await asyncio.sleep(0)
+                        except Exception as e:
+                            logger.warning(f"Failed to send stream message: {e}")
+
             elif "finished" in chunk and chunk["finished"]:
                 message_ids = chunk.get("message_ids", {})
 
@@ -191,6 +213,17 @@ async def _generate_stream_response(request: ChatRequest):
         if content_buffer:
             content_data = json.dumps({"type": "content", "content": content_buffer}) + "\n"
             yield content_data.encode("utf-8")
+
+        # 检查并发送最后的StreamNotifier消息
+        from copilot.core.stream_notifier import StreamNotifier
+
+        pending_messages = StreamNotifier.get_pending_messages(request.session_id)
+        for message in pending_messages:
+            try:
+                stream_data = message.to_json_string() + "\n"
+                yield stream_data.encode("utf-8")
+            except Exception as e:
+                logger.warning(f"Failed to send final stream message: {e}")
 
         # 发送结束事件
         end_data = json.dumps({"type": "end", "session_id": request.session_id, "message_ids": message_ids}) + "\n"
@@ -384,3 +417,45 @@ async def get_message_by_id(message_id: str, current_user: dict = Depends(get_cu
 async def health_check():
     """健康检查"""
     return {"status": "healthy", "timestamp": datetime.now()}
+
+
+@router.post("/permission-response")
+async def handle_permission_response(request: PermissionResponseRequest, current_user: dict = Depends(get_current_user_from_state)):
+    """处理工具权限响应（HTTP方式）"""
+    try:
+        # 验证用户权限
+        user_id = current_user.get("user_id")
+        if not user_id:
+            raise_validation_error("用户ID缺失")
+
+        # 验证session属于当前用户
+        session = await session_manager.get_session(request.session_id)
+        if session is None:
+            raise_chat_error(ErrorCodes.CHAT_SESSION_NOT_FOUND, "会话不存在")
+
+        if session.user_id != user_id:
+            raise_chat_error(ErrorCodes.CHAT_PERMISSION_DENIED, "无权访问此会话")
+
+        # 导入agent状态管理器
+        from copilot.core.agent_state_manager import agent_state_manager
+
+        # 处理权限响应
+        success = await agent_state_manager.handle_permission_response_simple(
+            session_id=request.session_id, request_id=request.request_id, approved=request.approved, user_feedback=request.user_feedback
+        )
+
+        if success:
+            return {
+                "success": True,
+                "message": "权限响应已处理",
+                "session_id": request.session_id,
+                "request_id": request.request_id,
+                "approved": request.approved,
+            }
+        else:
+            raise_chat_error("处理权限响应失败")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise ErrorHandler.handle_system_error(e, "处理工具权限响应")

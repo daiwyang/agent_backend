@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 
 from copilot.mcp_client.mcp_server_manager import mcp_server_manager
 from copilot.middleware.auth_middleware import authentication_middleware
-from copilot.router import chat_router, mcp_router, user_router, agent_management_router, sse_router
+from copilot.router import chat_router, mcp_router, user_router, agent_management_router
 from copilot.utils.logger import logger
 from copilot.utils.mongo_client import get_mongo_manager
 from copilot.utils.redis_client import close_redis, init_redis
@@ -48,11 +48,6 @@ async def lifespan(app: FastAPI):
         await get_chat_service()
         logger.info("Chat service initialized successfully")
 
-        # 启动SSE管理器
-        from copilot.router.sse_router import sse_manager
-
-        await sse_manager.start()
-        logger.info("SSE manager started")
     except Exception as e:
         logger.error(f"Failed to initialize connection pools: {str(e)}")
         raise
@@ -84,11 +79,6 @@ async def lifespan(app: FastAPI):
         await agent_manager.stop()
         logger.info("Agent manager stopped")
 
-        # 停止SSE管理器
-        from copilot.router.sse_router import sse_manager
-
-        await sse_manager.stop()
-        logger.info("SSE manager stopped")
     except Exception as e:
         logger.warning(f"Error closing connections: {str(e)}")
 
@@ -99,7 +89,6 @@ app.include_router(chat_router.router, prefix="/agent_backend", tags=["agent_bac
 app.include_router(user_router.router, prefix="/agent_backend", tags=["用户管理"])
 app.include_router(mcp_router.router, prefix="/agent_backend", tags=["MCP工具"])
 app.include_router(agent_management_router.router, prefix="/agent_backend", tags=["Agent管理"])
-app.include_router(sse_router.router, prefix="/agent_backend", tags=["SSE实时推送"])
 
 # 添加CORS中间件
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])

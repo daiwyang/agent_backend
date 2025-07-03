@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from copilot.core.tool_result_processor import ToolResultProcessor
-from copilot.core.simple_notifier import SimpleNotifier
+from copilot.core.stream_notifier import StreamNotifier
 from copilot.mcp_client.mcp_server_manager import mcp_server_manager
 from copilot.utils.logger import logger
 
@@ -182,19 +182,49 @@ class MCPToolWrapper:
             config = kwargs.get("config", {})
             if config and isinstance(config, dict) and "configurable" in config:
                 session_id = config["configurable"].get("session_id")
+            
+            # 如果从config中无法获取session_id，尝试从agent_state_manager获取当前活跃的会话
+            if not session_id:
+                try:
+                    from copilot.core.agent_state_manager import agent_state_manager
+                    # 获取所有活跃上下文，找到状态为RUNNING的会话
+                    for sid, context in agent_state_manager.active_contexts.items():
+                        if context.state.value == "running":
+                            session_id = sid
+                            logger.info(f"Retrieved session_id from agent_state_manager: {session_id}")
+                            break
+                except Exception as e:
+                    logger.debug(f"Failed to get session_id from agent_state_manager: {e}")
 
-            # 确保config参数存在
+            # 确保config参数存在，并注入session_id
             if "config" not in kwargs:
                 kwargs["config"] = {}
+            
+            # 如果config中没有session_id，但我们找到了session_id，就注入进去
+            if session_id and "configurable" not in kwargs["config"]:
+                kwargs["config"]["configurable"] = {"session_id": session_id}
+            elif session_id and "session_id" not in kwargs["config"].get("configurable", {}):
+                kwargs["config"].setdefault("configurable", {})["session_id"] = session_id
 
             logger.info(f"Executing wrapped tool: {tool.name} with session_id: {session_id}")
             logger.debug(f"Tool {tool.name} called with args: {args}, kwargs keys: {list(kwargs.keys())}")
+            logger.debug(f"Tool {tool.name} config content: {config}")
+            
+            # 调试：输出完整的kwargs结构以了解传递过程
+            if not session_id:
+                logger.warning(f"Session ID is None for tool {tool.name}")
+                logger.debug(f"Full kwargs structure: {kwargs}")
+                for key, value in kwargs.items():
+                    logger.debug(f"  {key}: {type(value)} = {value}")
+                    if key == "config" and isinstance(value, dict):
+                        for sub_key, sub_value in value.items():
+                            logger.debug(f"    config.{sub_key}: {type(sub_value)} = {sub_value}")
 
             # 准备工具执行信息
             tool_execution_info = {
                 "tool_name": tool.name,
                 "session_id": session_id,
-                "parameters": SimpleNotifier.extract_tool_parameters(args),
+                "parameters": StreamNotifier.extract_tool_parameters(args),
                 "start_time": datetime.now(UTC).isoformat(),
             }
 
@@ -209,51 +239,57 @@ class MCPToolWrapper:
 
                 # 通知前端工具开始执行
                 if session_id:
-                    await SimpleNotifier.notify_tool_execution_start(session_id, tool_execution_info)
+                    await StreamNotifier.notify_tool_execution_start(session_id, tool_execution_info)
 
                 # 权限检查逻辑
                 if risk_level in ["medium", "high"] and session_id:
-                    # 检查是否已经有权限确认
+                    # 检查或创建执行上下文
                     context = agent_state_manager.get_execution_context(session_id)
-                    if context and hasattr(context, "pending_tool_permissions"):
-                        # 检查是否已经确认过这个工具
-                        tool_key = f"{tool.name}_{hash(str(args))}"
-                        if tool_key not in context.pending_tool_permissions:
-                            # 需要权限确认，创建权限请求
-                            async def tool_callback():
-                                # 在回调中执行原始工具调用，确保传递config
-                                raw_result = await original_arun(*args, **kwargs)
-                                
-                                # 通知前端工具执行完成
-                                if session_id:
-                                    await SimpleNotifier.notify_tool_execution_complete(
-                                        session_id, tool_execution_info, raw_result, success=True
-                                    )
-                                
-                                # 将原始结果转换为用户友好的消息
-                                return ToolResultProcessor.format_for_user(tool.name, raw_result)
-
-                            # 提取参数用于显示（尽力而为）
-                            display_params = {}
-                            if args:
-                                if isinstance(args[0], dict):
-                                    display_params = args[0]
-                                else:
-                                    display_params = {"input": str(args[0])}
-
-                            should_continue = await agent_state_manager.request_tool_permission(
-                                session_id=session_id, 
-                                tool_name=tool.name, 
-                                parameters=display_params, 
-                                callback=tool_callback, 
-                                risk_level=risk_level
+                    if not context:
+                        context = agent_state_manager.create_execution_context(session_id)
+                    
+                    # 中高风险工具需要权限确认
+                    logger.info(f"Medium/high-risk tool '{tool.name}' requires permission confirmation")
+                    
+                    # 需要权限确认，创建权限请求
+                    async def tool_callback():
+                        # 在回调中执行原始工具调用，确保传递config
+                        raw_result = await original_arun(*args, **kwargs)
+                        
+                        # 通知前端工具执行完成
+                        if session_id:
+                            await StreamNotifier.notify_tool_execution_complete(
+                                session_id, tool_execution_info, raw_result, success=True
                             )
+                        
+                        # 将原始结果转换为用户友好的消息
+                        formatted_result = ToolResultProcessor.format_for_user(tool.name, raw_result)
+                        # 返回二元组格式 (content, raw_output) 以满足 response_format='content_and_artifact'
+                        return (formatted_result, raw_result)
 
-                            if not should_continue:
-                                # 通知前端等待权限确认
-                                if session_id:
-                                    await SimpleNotifier.notify_tool_waiting_permission(session_id, tool_execution_info)
-                                return f"🔒 等待用户确认执行工具: {tool.name}"
+                    # 提取参数用于显示（尽力而为）
+                    display_params = {}
+                    if args:
+                        if isinstance(args[0], dict):
+                            display_params = args[0]
+                        else:
+                            display_params = {"input": str(args[0])}
+
+                    should_continue = await agent_state_manager.request_tool_permission(
+                        session_id=session_id, 
+                        tool_name=tool.name, 
+                        parameters=display_params, 
+                        callback=tool_callback, 
+                        risk_level=risk_level
+                    )
+
+                    if not should_continue:
+                        # 通知前端等待权限确认
+                        if session_id:
+                            await StreamNotifier.notify_tool_waiting_permission(session_id, tool_execution_info)
+                        message = f"🔒 等待用户确认执行工具: {tool.name}"
+                        # 返回二元组格式 (content, raw_output) 以满足 response_format='content_and_artifact'
+                        return (message, {"status": "permission_required", "tool_name": tool.name})
 
                 # 权限已确认或低风险工具，直接调用原始工具
                 logger.debug(f"Calling original tool {tool.name} with config: {kwargs.get('config', {})}")
@@ -262,12 +298,14 @@ class MCPToolWrapper:
                 
                 # 通知前端工具执行完成
                 if session_id:
-                    await SimpleNotifier.notify_tool_execution_complete(
+                    await StreamNotifier.notify_tool_execution_complete(
                         session_id, tool_execution_info, raw_result, success=True
                     )
                 
                 # 将原始结果转换为用户友好的消息
-                return ToolResultProcessor.format_for_user(tool.name, raw_result)
+                formatted_result = ToolResultProcessor.format_for_user(tool.name, raw_result)
+                # 返回二元组格式 (content, raw_output) 以满足 response_format='content_and_artifact'
+                return (formatted_result, raw_result)
 
             except Exception as e:
                 logger.error(f"Exception in wrapped tool {tool.name}: {e}")
@@ -275,7 +313,7 @@ class MCPToolWrapper:
 
                 # 通知前端工具执行失败
                 if session_id:
-                    await SimpleNotifier.notify_tool_execution_complete(
+                    await StreamNotifier.notify_tool_execution_complete(
                         session_id, tool_execution_info, str(e), success=False
                     )
 
@@ -288,21 +326,25 @@ class MCPToolWrapper:
                     
                     # 通知前端重试成功
                     if session_id:
-                        await SimpleNotifier.notify_tool_execution_complete(
+                        await StreamNotifier.notify_tool_execution_complete(
                             session_id, tool_execution_info, raw_result, success=True
                         )
                     
-                    return ToolResultProcessor.format_for_user(tool.name, raw_result)
+                    formatted_result = ToolResultProcessor.format_for_user(tool.name, raw_result)
+                    # 返回二元组格式 (content, raw_output) 以满足 response_format='content_and_artifact'
+                    return (formatted_result, raw_result)
                 except Exception as orig_e:
                     logger.error(f"Original tool call also failed: {orig_e}")
                     
                     # 通知前端最终失败
                     if session_id:
-                        await SimpleNotifier.notify_tool_execution_complete(
+                        await StreamNotifier.notify_tool_execution_complete(
                             session_id, tool_execution_info, str(orig_e), success=False
                         )
                     
-                    return f"工具 {tool.name} 执行失败: {str(orig_e)}"
+                    error_message = f"工具 {tool.name} 执行失败: {str(orig_e)}"
+                    # 返回二元组格式 (content, raw_output) 以满足 response_format='content_and_artifact'
+                    return (error_message, {"status": "error", "error": str(orig_e)})
 
         # 替换原始的异步执行函数
         tool._arun = custom_arun

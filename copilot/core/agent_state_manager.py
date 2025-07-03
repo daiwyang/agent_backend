@@ -224,14 +224,16 @@ class AgentStateManager:
             context.update_state(AgentExecutionState.ERROR, f"工具执行错误: {str(e)}")
             return False
 
-    async def handle_permission_response_simple(self, session_id: str, approved: bool) -> bool:
+    async def handle_permission_response_simple(self, session_id: str, request_id: str = None, approved: bool = True, user_feedback: str = None) -> bool:
         """
-        简化的权限响应处理 - 适用于HTTP轮询方案
-        处理最新的权限请求，不需要execution_id
+        简化的权限响应处理 - 适用于HTTP方案
+        支持request_id匹配或处理最新的权限请求
 
         Args:
             session_id: 会话ID
+            request_id: 权限请求ID（可选，如果提供则精确匹配）
             approved: 是否批准
+            user_feedback: 用户反馈（可选）
 
         Returns:
             bool: 处理是否成功
@@ -241,13 +243,25 @@ class AgentStateManager:
             logger.error(f"No execution context found for session: {session_id}")
             return False
 
-        # 获取最新的待执行工具
+        # 获取待执行工具
         if not context.pending_tools:
             logger.warning(f"No pending tools for session: {session_id}")
             return False
 
-        # 处理最新的待执行工具
-        pending_tool = context.pending_tools[-1]
+        # 如果提供了request_id，尝试匹配
+        pending_tool = None
+        if request_id:
+            for tool in context.pending_tools:
+                if tool.execution_id == request_id:
+                    pending_tool = tool
+                    break
+            
+            if not pending_tool:
+                logger.warning(f"No pending tool found with request_id: {request_id}")
+                return False
+        else:
+            # 如果没有提供request_id，处理最新的待执行工具
+            pending_tool = context.pending_tools[-1]
 
         try:
             if approved:
@@ -255,11 +269,16 @@ class AgentStateManager:
                 result = await pending_tool.callback()
                 pending_tool.status = "approved"
                 context.update_state(AgentExecutionState.RUNNING, "继续执行...")
-                logger.info(f"Tool executed successfully: {pending_tool.tool_name}")
+                logger.info(f"Tool executed successfully: {pending_tool.tool_name} (request_id: {pending_tool.execution_id})")
             else:
                 # 用户拒绝
                 pending_tool.status = "rejected"
-                context.update_state(AgentExecutionState.PAUSED, "用户拒绝了工具执行")
+                context.update_state(AgentExecutionState.PAUSED, f"用户拒绝了工具执行: {pending_tool.tool_name}")
+                logger.info(f"Tool execution rejected: {pending_tool.tool_name} (request_id: {pending_tool.execution_id})")
+
+            # 记录用户反馈
+            if user_feedback:
+                logger.info(f"User feedback for {pending_tool.tool_name}: {user_feedback}")
 
             # 从待执行列表中移除
             context.pending_tools.remove(pending_tool)

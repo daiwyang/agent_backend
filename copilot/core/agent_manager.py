@@ -384,9 +384,9 @@ class AgentManager:
             if not server_ids:
                 return []
                 
-            # 使用CoreAgent的静态方法获取工具
-            from copilot.core.agent import CoreAgent
-            mcp_tools = await CoreAgent._get_mcp_tools_for_servers(list(server_ids))
+            # 使用MCPToolWrapper获取指定服务器的工具
+            from copilot.core.mcp_tool_wrapper import MCPToolWrapper
+            mcp_tools = await MCPToolWrapper.get_mcp_tools_for_servers(list(server_ids))
             
             logger.info(f"Retrieved {len(mcp_tools)} MCP tools from servers: {server_ids}")
             return mcp_tools
