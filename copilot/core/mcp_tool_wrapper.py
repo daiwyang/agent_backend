@@ -1,14 +1,13 @@
 """
-MCP工具包装器 - 处理MCP工具的包装、权限检查和执行
+MCP工具包装器 - 统一MCP工具接口、权限管理和状态通知
 """
 
 import traceback
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from typing import Any, Dict, List, Optional
 
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
-from copilot.core.tool_result_processor import ToolResultProcessor
 from copilot.core.stream_notifier import StreamNotifier
 from copilot.mcp_client.mcp_server_manager import mcp_server_manager
 from copilot.utils.logger import logger
@@ -282,11 +281,9 @@ class MCPToolWrapper:
                             raw_result = await original_arun(*args, **kwargs)
 
                             if session_id:
-                                # 为前端通知使用简洁的状态消息
-                                status_message = ToolResultProcessor.format_for_user(tool.name, raw_result)
-                                await StreamNotifier.send_tool_execution_status(
-                                    session_id=session_id, request_id=request_id, tool_name=tool.name, status="completed", result=status_message
-                                )
+                                # 通知前端工具执行完成，使用实际的工具结果数据
+                                tool_execution_info["request_id"] = request_id
+                                await StreamNotifier.notify_tool_execution_complete(session_id, tool_execution_info, raw_result, success=True)
 
                             # 🔥 关键修复：返回实际的工具结果给AI模型，而不是状态消息
                             processed_result = MCPToolWrapper._format_for_ai(tool.name, raw_result)
@@ -395,12 +392,12 @@ class MCPToolWrapper:
                     else:
                         return str(result_data)
 
-                # 对于结构化数据，尝试格式化为可读的JSON
+                # 对于结构化数据，直接返回JSON格式，不要前缀
                 try:
                     formatted_json = json.dumps(raw_result, ensure_ascii=False, indent=2)
-                    return f"工具 {tool_name} 执行结果：\n{formatted_json}"
+                    return formatted_json
                 except:
-                    return f"工具 {tool_name} 执行结果：\n{str(raw_result)}"
+                    return str(raw_result)
 
             elif isinstance(raw_result, str):
                 # 尝试解析JSON字符串
@@ -408,7 +405,7 @@ class MCPToolWrapper:
                     parsed_data = json.loads(raw_result)
                     if isinstance(parsed_data, dict):
                         formatted_json = json.dumps(parsed_data, ensure_ascii=False, indent=2)
-                        return f"工具 {tool_name} 执行结果：\n{formatted_json}"
+                        return formatted_json
                 except:
                     pass
                 # 直接返回字符串内容
@@ -416,8 +413,8 @@ class MCPToolWrapper:
 
             else:
                 # 其他类型转换为字符串
-                return f"工具 {tool_name} 执行结果：\n{str(raw_result)}"
+                return str(raw_result)
 
         except Exception as e:
             logger.warning(f"Error formatting tool result for AI: {e}")
-            return f"工具 {tool_name} 执行完成，但结果格式化失败：{str(e)}"
+            return f"工具执行完成，但结果格式化失败：{str(e)}"

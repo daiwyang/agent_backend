@@ -1,17 +1,17 @@
 """
-核心Agent - 支持多个LLM提供商和MCP工具
+核心Agent实现 - 支持多LLM、多模态、MCP工具、流式输出和权限管理
 """
 
+import traceback
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 
 from copilot.core.chat_stream_handler import ChatStreamHandler
-from copilot.core.llm_factory import LLMFactory
 from copilot.core.mcp_tool_wrapper import MCPToolWrapper
 from copilot.core.multimodal_handler import MultimodalHandler
-from copilot.core.tool_result_processor import ToolResultProcessor
+from copilot.utils.llm_manager import LLMFactory
 from copilot.utils.logger import logger
 from copilot.utils.token_calculator import TokenCalculator
 
@@ -48,7 +48,6 @@ class CoreAgent:
 
         # 初始化处理器
         self.multimodal_handler = MultimodalHandler(self.provider)
-        self.tool_result_processor = ToolResultProcessor()
 
         # 合并MCP工具和传统工具
         all_tools = self._merge_tools()
@@ -59,7 +58,7 @@ class CoreAgent:
         )
 
         # 初始化聊天流处理器
-        self.chat_stream_handler = ChatStreamHandler(self.graph, self.tool_result_processor)
+        self.chat_stream_handler = ChatStreamHandler(self.graph)
 
     def _merge_tools(self) -> List:
         """合并传统工具和MCP工具"""
@@ -199,7 +198,7 @@ class CoreAgent:
             )
 
             # 重新初始化聊天流处理器
-            self.chat_stream_handler = ChatStreamHandler(self.graph, self.tool_result_processor)
+            self.chat_stream_handler = ChatStreamHandler(self.graph)
 
             logger.info(f"Successfully switched to provider: {provider}, model: {model_name}")
             return True
@@ -260,7 +259,7 @@ class CoreAgent:
             )
 
             # 重新初始化聊天流处理器
-            self.chat_stream_handler = ChatStreamHandler(self.graph, self.tool_result_processor)
+            self.chat_stream_handler = ChatStreamHandler(self.graph)
 
             logger.info(f"Successfully updated Agent with {len(mcp_tools)} MCP tools")
             return True

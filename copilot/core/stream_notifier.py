@@ -6,12 +6,7 @@ import uuid
 from datetime import datetime, UTC
 from typing import Any, Dict, Optional
 
-from copilot.model.chat_model import (
-    ToolPermissionRequest,
-    ToolExecutionStatus,
-    ToolPermissionRequestMessage,
-    ToolExecutionStatusMessage
-)
+from copilot.model.chat_model import ToolPermissionRequest, ToolExecutionStatus, ToolPermissionRequestMessage, ToolExecutionStatusMessage
 from copilot.utils.logger import logger
 
 
@@ -58,10 +53,10 @@ class StreamNotifier:
         try:
             if session_id not in StreamNotifier._pending_messages:
                 StreamNotifier._pending_messages[session_id] = []
-            
+
             StreamNotifier._pending_messages[session_id].append(message)
             logger.debug(f"Added stream message for session {session_id}: {type(message).__name__}")
-            
+
         except Exception as e:
             logger.warning(f"Failed to add stream message: {e}")
 
@@ -78,16 +73,12 @@ class StreamNotifier:
 
     @staticmethod
     async def send_tool_permission_request(
-        session_id: str, 
-        tool_name: str, 
-        parameters: Dict[str, Any], 
-        risk_level: str = "medium",
-        reasoning: Optional[str] = None
+        session_id: str, tool_name: str, parameters: Dict[str, Any], risk_level: str = "medium", reasoning: Optional[str] = None
     ) -> str:
         """发送工具权限请求消息"""
         try:
             request_id = str(uuid.uuid4())
-            
+
             # 创建权限请求数据
             permission_request = ToolPermissionRequest(
                 request_id=request_id,
@@ -95,60 +86,47 @@ class StreamNotifier:
                 tool_description=f"工具 {tool_name} 需要执行",
                 parameters=parameters,
                 risk_level=risk_level,
-                reasoning=reasoning
+                reasoning=reasoning,
             )
-            
+
             # 创建流式消息
-            message = ToolPermissionRequestMessage(
-                session_id=session_id,
-                timestamp=datetime.now(UTC),
-                data=permission_request
-            )
-            
+            message = ToolPermissionRequestMessage(session_id=session_id, timestamp=datetime.now(UTC), data=permission_request)
+
             # 添加到流式队列
             await StreamNotifier.add_stream_message(session_id, message)
-            
+
             logger.info(f"Sent tool permission request for session {session_id}: {tool_name}")
             return request_id
-            
+
         except Exception as e:
             logger.error(f"Failed to send tool permission request: {e}")
             return ""
 
     @staticmethod
     async def send_tool_execution_status(
-        session_id: str, 
+        session_id: str,
         request_id: str,
-        tool_name: str, 
+        tool_name: str,
         status: str,
-        result: Optional[str] = None,
+        result: Optional[Any] = None,
         error: Optional[str] = None,
-        progress: Optional[int] = None
+        progress: Optional[int] = None,
     ):
         """发送工具执行状态消息"""
         try:
             # 创建执行状态数据
             execution_status = ToolExecutionStatus(
-                request_id=request_id,
-                tool_name=tool_name,
-                status=status,
-                result=result,
-                error=error,
-                progress=progress
+                request_id=request_id, tool_name=tool_name, status=status, result=result, error=error, progress=progress
             )
-            
+
             # 创建流式消息
-            message = ToolExecutionStatusMessage(
-                session_id=session_id,
-                timestamp=datetime.now(UTC),
-                data=execution_status
-            )
-            
+            message = ToolExecutionStatusMessage(session_id=session_id, timestamp=datetime.now(UTC), data=execution_status)
+
             # 添加到流式队列
             await StreamNotifier.add_stream_message(session_id, message)
-            
+
             logger.debug(f"Sent tool execution status for session {session_id}: {tool_name} - {status}")
-            
+
         except Exception as e:
             logger.error(f"Failed to send tool execution status: {e}")
 
@@ -158,10 +136,7 @@ class StreamNotifier:
         """通知工具开始执行"""
         request_id = tool_info.get("request_id", str(uuid.uuid4()))
         await StreamNotifier.send_tool_execution_status(
-            session_id=session_id,
-            request_id=request_id,
-            tool_name=tool_info["tool_name"],
-            status="executing"
+            session_id=session_id, request_id=request_id, tool_name=tool_info["tool_name"], status="executing"
         )
 
     @staticmethod
@@ -172,43 +147,29 @@ class StreamNotifier:
             session_id=session_id,
             tool_name=tool_info["tool_name"],
             parameters=tool_info["parameters"],
-            risk_level=tool_info.get("risk_level", "medium")
+            risk_level=tool_info.get("risk_level", "medium"),
         )
-        
+
         # 更新工具信息中的request_id
         tool_info["request_id"] = request_id
-        
+
         # 发送等待状态
         await StreamNotifier.send_tool_execution_status(
-            session_id=session_id,
-            request_id=request_id,
-            tool_name=tool_info["tool_name"],
-            status="waiting"
+            session_id=session_id, request_id=request_id, tool_name=tool_info["tool_name"], status="waiting"
         )
 
     @staticmethod
     async def notify_tool_execution_complete(session_id: str, tool_info: Dict[str, Any], result: Any, success: bool):
         """通知工具执行完成"""
         request_id = tool_info.get("request_id", str(uuid.uuid4()))
-        
+
         if success:
-            # 处理成功结果
-            from copilot.core.tool_result_processor import ToolResultProcessor
-            processed_result = ToolResultProcessor.format_for_user(tool_info["tool_name"], result)
-            
+            # 直接使用工具的原始结果对象，保持数据结构
             await StreamNotifier.send_tool_execution_status(
-                session_id=session_id,
-                request_id=request_id,
-                tool_name=tool_info["tool_name"],
-                status="completed",
-                result=processed_result
+                session_id=session_id, request_id=request_id, tool_name=tool_info["tool_name"], status="completed", result=result  # 直接传递原始对象
             )
         else:
             # 处理失败结果
             await StreamNotifier.send_tool_execution_status(
-                session_id=session_id,
-                request_id=request_id,
-                tool_name=tool_info["tool_name"],
-                status="failed",
-                error=str(result)
-            ) 
+                session_id=session_id, request_id=request_id, tool_name=tool_info["tool_name"], status="failed", error=str(result)
+            )

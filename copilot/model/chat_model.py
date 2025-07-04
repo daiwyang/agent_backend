@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 
 from pydantic import BaseModel
 
@@ -104,7 +104,7 @@ class ToolExecutionStatus(BaseModel):
     request_id: str
     tool_name: str
     status: str  # "waiting", "executing", "completed", "failed", "cancelled"
-    result: Optional[str] = None
+    result: Optional[Any] = None  # 支持任意类型的工具结果：dict, str, list等
     error: Optional[str] = None
     progress: Optional[int] = None  # 0-100的进度百分比
 

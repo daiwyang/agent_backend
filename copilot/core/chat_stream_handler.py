@@ -4,23 +4,20 @@
 
 from typing import AsyncGenerator, Dict, Optional
 
-from copilot.core.tool_result_processor import ToolResultProcessor
 from copilot.utils.logger import logger
 
 
 class ChatStreamHandler:
     """聊天流处理器 - 负责处理流式输出和权限确认流程"""
     
-    def __init__(self, graph, tool_result_processor: ToolResultProcessor):
+    def __init__(self, graph):
         """
         初始化聊天流处理器
         
         Args:
             graph: LangGraph实例
-            tool_result_processor: 工具结果处理器
         """
         self.graph = graph
-        self.tool_result_processor = tool_result_processor
     
     async def handle_stream_with_permission(self, inputs: Dict, config: Dict, 
                                           session_id: Optional[str]) -> AsyncGenerator[str, None]:
@@ -69,9 +66,8 @@ class ChatStreamHandler:
                                 context.update_state(AgentExecutionState.PAUSED)
                                 break
                 else:
-                    # 对所有其他内容也应用过滤逻辑
-                    if not self.tool_result_processor.should_filter_content(str(chunk)):
-                        yield chunk
+                    # 直接输出所有内容，不再需要过滤逻辑
+                    yield chunk
 
             # 🔥 关键修复：确保执行状态正确结束
             if session_id and context:
@@ -105,11 +101,6 @@ class ChatStreamHandler:
                     message_chunk, _ = chunk
                     if hasattr(message_chunk, "content") and message_chunk.content:
                         content = str(message_chunk.content)
-                        
-                        # 过滤掉MCP工具的原始返回结果
-                        if self.tool_result_processor.should_filter_content(content):
-                            continue
-                            
                         yield content
             return
         except Exception as e:
@@ -123,10 +114,6 @@ class ChatStreamHandler:
                         if hasattr(msg, "content") and msg.content:
                             content = str(msg.content)
                             
-                            # 过滤掉MCP工具的原始返回结果
-                            if self.tool_result_processor.should_filter_content(content):
-                                continue
-                                
                             # 简单分块
                             for i in range(0, len(content), 30):
                                 yield content[i : i + 30]
