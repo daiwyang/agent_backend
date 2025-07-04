@@ -164,11 +164,27 @@ async def _generate_stream_response(request: ChatRequest):
     import json
 
     try:
+        # 🎯 控制台输出：对话开始和用户问题
+        logger.info(f"[CHAT] 对话开始 [Session: {request.session_id}] " + "="*50)
+        logger.info(f"[CHAT] 用户提问 [Session: {request.session_id}]: {request.message}")
+        
+        # 🎯 控制台输出：附件信息（如果有）
+        if request.attachments:
+            logger.info(f"[CHAT] 附件信息 [Session: {request.session_id}]: {len(request.attachments)}个附件")
+            for i, attachment in enumerate(request.attachments, 1):
+                attachment_type = attachment.get('type', '未知类型')
+                logger.info(f"[CHAT] 附件{i} [Session: {request.session_id}]: {attachment_type}")
+        
+        # 🎯 控制台输出：工具使用状态
+        tool_status = "启用" if request.enable_mcp_tools else "禁用"
+        logger.info(f"[CHAT] MCP工具状态 [Session: {request.session_id}]: {tool_status}")
+        
         # 发送开始事件
         start_data = json.dumps({"type": "start", "session_id": request.session_id}) + "\n"
         yield start_data.encode("utf-8")
 
         content_buffer = ""
+        full_response_buffer = ""  # 用于记录完整回复
         message_ids = None
 
         # 使用统一的流式聊天方法
@@ -177,11 +193,15 @@ async def _generate_stream_response(request: ChatRequest):
             session_id=request.session_id, message=request.message, attachments=request.attachments, enable_tools=request.enable_mcp_tools
         ):
             if "error" in chunk:
+                # 🎯 控制台输出：记录聊天错误
+                logger.error(f"[CHAT] 聊天服务错误 [Session: {request.session_id}]: {chunk['error']}")
+                
                 error_data = json.dumps({"type": "error", "content": chunk["error"]}) + "\n"
                 yield error_data.encode("utf-8")
                 return
             elif "content" in chunk:
                 content_buffer += chunk["content"]
+                full_response_buffer += chunk["content"]  # 累积完整回复
 
                 # 优化缓冲策略：更频繁的刷新以获得更好的实时体验
                 if len(content_buffer) >= 3 or any(char in content_buffer for char in "，。！？；：\n ") or content_buffer.endswith(" "):
@@ -209,6 +229,16 @@ async def _generate_stream_response(request: ChatRequest):
         if content_buffer:
             content_data = json.dumps({"type": "content", "content": content_buffer}) + "\n"
             yield content_data.encode("utf-8")
+            full_response_buffer += content_buffer  # 确保剩余内容也被记录
+
+        # 🎯 控制台输出：记录AI完整回复
+        if full_response_buffer.strip():
+            logger.info(f"[CHAT] AI回复 [Session: {request.session_id}]: {full_response_buffer.strip()}")
+        else:
+            logger.info(f"[CHAT] AI回复 [Session: {request.session_id}]: (无内容)")
+        
+        # 🎯 控制台输出：对话结束标识
+        logger.info(f"[CHAT] 对话完成 [Session: {request.session_id}] " + "="*50)
 
         # 检查并发送最后的StreamNotifier消息
         from copilot.core.stream_notifier import StreamNotifier
@@ -226,6 +256,9 @@ async def _generate_stream_response(request: ChatRequest):
         yield end_data.encode("utf-8")
 
     except Exception as e:
+        # 🎯 控制台输出：记录错误信息
+        logger.error(f"[CHAT] 处理错误 [Session: {request.session_id}]: {str(e)}")
+        
         error_data = json.dumps({"type": "error", "content": f"处理请求时出现错误: {str(e)}"}) + "\n"
         yield error_data.encode("utf-8")
 

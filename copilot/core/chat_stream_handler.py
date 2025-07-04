@@ -28,14 +28,30 @@ class ChatStreamHandler:
         try:
             from copilot.core.agent_state_manager import AgentExecutionState, agent_state_manager
 
-            # 第一阶段：正常执行直到遇到权限确认
+            # 获取执行上下文（不重复设置状态，因为agent.py中已经设置了）
+            context = None
+            if session_id:
+                context = agent_state_manager.get_execution_context(session_id)
+                # 如果没有上下文，说明可能有问题，但不在这里创建，因为应该在agent.py中创建
+                if not context:
+                    logger.warning(f"No execution context found for session {session_id} in ChatStreamHandler")
+                    context = agent_state_manager.create_execution_context(session_id)
+                    context.update_state(AgentExecutionState.RUNNING)
+
+            # 流式处理聊天
+            has_content = False
+            permission_handled = False
+            
             async for chunk in self._stream_internal(inputs, config):
+                has_content = True
+                
                 # 检查是否遇到权限确认请求
                 if "🔒 等待用户确认执行工具:" in str(chunk):
                     yield chunk
 
                     # 如果有session_id，等待权限确认
-                    if session_id:
+                    if session_id and not permission_handled:
+                        permission_handled = True
                         context = agent_state_manager.get_execution_context(session_id)
                         if context and context.state == AgentExecutionState.WAITING_PERMISSION:
                             yield "\n\n⏳ 请在聊天界面中确认是否允许执行此工具...\n"
@@ -57,8 +73,27 @@ class ChatStreamHandler:
                     if not self.tool_result_processor.should_filter_content(str(chunk)):
                         yield chunk
 
+            # 🔥 关键修复：确保执行状态正确结束
+            if session_id and context:
+                if has_content:
+                    # 如果没有处理权限确认，说明没有工具需要权限，直接完成
+                    if not permission_handled:
+                        context.update_state(AgentExecutionState.COMPLETED)
+                        logger.info(f"Chat completed without tool permission requests for session: {session_id}")
+                else:
+                    # 如果没有输出内容，可能是错误状态
+                    context.update_state(AgentExecutionState.IDLE)
+                    logger.info(f"Chat completed with no content for session: {session_id}")
+
         except Exception as e:
             logger.error(f"Error in chat_stream_with_permission_handling: {str(e)}")
+            
+            # 🔥 关键修复：异常时也要更新状态
+            if session_id:
+                context = agent_state_manager.get_execution_context(session_id)
+                if context:
+                    context.update_state(AgentExecutionState.ERROR, error=str(e))
+            
             yield f"处理请求时出现错误: {str(e)}"
 
     async def _stream_internal(self, inputs: Dict, config: Dict) -> AsyncGenerator[str, None]:
