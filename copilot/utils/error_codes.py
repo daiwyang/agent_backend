@@ -257,6 +257,33 @@ class ErrorCodes:
         detail="获取会话列表时发生错误"
     )
     
+    # 聊天权限被拒绝
+    CHAT_PERMISSION_DENIED = ErrorCode(
+        category=ErrorCategory.CHAT,
+        code="006",
+        message="聊天权限被拒绝",
+        http_status=403,
+        detail="您没有权限执行此聊天操作"
+    )
+    
+    # 工具权限响应处理失败
+    CHAT_PERMISSION_RESPONSE_FAILED = ErrorCode(
+        category=ErrorCategory.CHAT,
+        code="007",
+        message="工具权限响应处理失败",
+        http_status=500,
+        detail="处理工具权限响应时发生错误"
+    )
+    
+    # 权限请求已超时
+    CHAT_PERMISSION_TIMEOUT = ErrorCode(
+        category=ErrorCategory.CHAT,
+        code="008",
+        message="权限请求已超时",
+        http_status=410,  # Gone - 资源已不存在
+        detail="权限请求已超时，无法再进行响应"
+    )
+    
     # ========== 会话管理相关错误 (SESSION) ==========
     # 会话创建失败
     SESSION_CREATION_FAILED = ErrorCode(

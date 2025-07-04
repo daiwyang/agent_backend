@@ -282,12 +282,15 @@ class MCPToolWrapper:
                             raw_result = await original_arun(*args, **kwargs)
 
                             if session_id:
+                                # 为前端通知使用简洁的状态消息
+                                status_message = ToolResultProcessor.format_for_user(tool.name, raw_result)
                                 await StreamNotifier.send_tool_execution_status(
-                                    session_id=session_id, request_id=request_id, tool_name=tool.name, status="completed", result=str(raw_result)
+                                    session_id=session_id, request_id=request_id, tool_name=tool.name, status="completed", result=status_message
                                 )
 
-                            formatted_result = ToolResultProcessor.format_for_user(tool.name, raw_result)
-                            return (formatted_result, raw_result)
+                            # 🔥 关键修复：返回实际的工具结果给AI模型，而不是状态消息
+                            processed_result = MCPToolWrapper._format_for_ai(tool.name, raw_result)
+                            return (processed_result, raw_result)
                         else:
                             logger.info(f"Permission denied or timeout for tool {tool.name} (request_id: {request_id})")
                             error_message = f"工具 {tool.name} 的执行权限被拒绝或超时"
@@ -306,10 +309,10 @@ class MCPToolWrapper:
                 if session_id:
                     await StreamNotifier.notify_tool_execution_complete(session_id, tool_execution_info, raw_result, success=True)
 
-                # 将原始结果转换为用户友好的消息
-                formatted_result = ToolResultProcessor.format_for_user(tool.name, raw_result)
+                # 🔥 关键修复：返回实际的工具结果给AI模型，而不是状态消息
+                processed_result = MCPToolWrapper._format_for_ai(tool.name, raw_result)
                 # 返回二元组格式 (content, raw_output) 以满足 response_format='content_and_artifact'
-                return (formatted_result, raw_result)
+                return (processed_result, raw_result)
 
             except Exception as e:
                 logger.error(f"Exception in wrapped tool {tool.name}: {e}")
@@ -330,9 +333,9 @@ class MCPToolWrapper:
                     if session_id:
                         await StreamNotifier.notify_tool_execution_complete(session_id, tool_execution_info, raw_result, success=True)
 
-                    formatted_result = ToolResultProcessor.format_for_user(tool.name, raw_result)
+                    processed_result = MCPToolWrapper._format_for_ai(tool.name, raw_result)
                     # 返回二元组格式 (content, raw_output) 以满足 response_format='content_and_artifact'
-                    return (formatted_result, raw_result)
+                    return (processed_result, raw_result)
                 except Exception as orig_e:
                     logger.error(f"Original tool call also failed: {orig_e}")
 
@@ -349,3 +352,72 @@ class MCPToolWrapper:
 
         logger.debug(f"Wrapped tool: {tool.name}")
         return tool
+
+    @staticmethod
+    def _format_for_ai(tool_name: str, raw_result: Any) -> str:
+        """
+        格式化工具结果给AI模型使用
+
+        Args:
+            tool_name: 工具名称
+            raw_result: 工具的原始返回结果
+
+        Returns:
+            str: 格式化后的结果，包含实际数据内容
+        """
+        try:
+            import json
+
+            # 处理MCP工具的标准返回格式
+            if isinstance(raw_result, dict):
+                # 检查是否有content字段（MCP工具的标准格式）
+                if "content" in raw_result:
+                    content = raw_result["content"]
+                    if isinstance(content, list) and len(content) > 0:
+                        # 提取文本内容
+                        text_parts = []
+                        for item in content:
+                            if isinstance(item, dict) and "text" in item:
+                                text_parts.append(item["text"])
+                            elif isinstance(item, str):
+                                text_parts.append(item)
+                            else:
+                                text_parts.append(str(item))
+                        return "\n".join(text_parts)
+
+                # 检查是否是包装后的结果格式
+                if "success" in raw_result and "result" in raw_result:
+                    result_data = raw_result["result"]
+                    if isinstance(result_data, dict) and "processed_text" in result_data:
+                        return result_data["processed_text"]
+                    elif isinstance(result_data, dict) and "raw_output" in result_data:
+                        return MCPToolWrapper._format_for_ai(tool_name, result_data["raw_output"])
+                    else:
+                        return str(result_data)
+
+                # 对于结构化数据，尝试格式化为可读的JSON
+                try:
+                    formatted_json = json.dumps(raw_result, ensure_ascii=False, indent=2)
+                    return f"工具 {tool_name} 执行结果：\n{formatted_json}"
+                except:
+                    return f"工具 {tool_name} 执行结果：\n{str(raw_result)}"
+
+            elif isinstance(raw_result, str):
+                # 尝试解析JSON字符串
+                try:
+                    parsed_data = json.loads(raw_result)
+                    if isinstance(parsed_data, dict):
+                        formatted_json = json.dumps(parsed_data, ensure_ascii=False, indent=2)
+                        return f"工具 {tool_name} 执行结果：\n{formatted_json}"
+                except:
+                    pass
+                # 直接返回字符串内容
+                return raw_result
+
+            else:
+                # 其他类型转换为字符串
+                return f"工具 {tool_name} 执行结果：\n{str(raw_result)}"
+
+        except Exception as e:
+            logger.warning(f"Error formatting tool result for AI: {e}")
+            return f"工具 {tool_name} 执行完成，但结果格式化失败：{str(e)}"

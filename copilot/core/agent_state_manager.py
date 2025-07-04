@@ -215,7 +215,7 @@ class AgentStateManager:
 
     async def handle_permission_response_simple(
         self, session_id: str, request_id: str = None, approved: bool = True, user_feedback: str = None
-    ) -> bool:
+    ) -> tuple[bool, str]:
         """
         简化的权限响应处理 - 适用于HTTP方案
         支持request_id匹配或处理最新的权限请求
@@ -232,63 +232,45 @@ class AgentStateManager:
         context = self.get_execution_context(session_id)
         if not context:
             logger.error(f"No execution context found for session: {session_id}")
-            return False
+            return False, "会话不存在"
 
-        # 获取待执行工具
-        if not context.pending_tools:
-            logger.warning(f"No pending tools for session: {session_id}")
-            return False
+        # 验证必需的 request_id 参数
+        if not request_id:
+            logger.error(f"Missing request_id for permission response")
+            return False, "缺少权限请求ID"
 
-        # 如果提供了request_id，尝试匹配
-        pending_tool = None
-        if request_id:
-            for tool in context.pending_tools:
-                if tool.execution_id == request_id:
-                    pending_tool = tool
-                    break
+        # 检查是否已经有权限决策（可能已超时）
+        existing_decision = context.permission_decisions.get(request_id)
+        if existing_decision is not None:
+            logger.warning(f"Permission request {request_id} already has decision: {existing_decision} (likely timeout)")
+            return False, "timeout"  # 权限请求已经被处理（通常是超时）
 
-            if not pending_tool:
-                logger.warning(f"No pending tool found with request_id: {request_id}")
-                return False
-        else:
-            # 如果没有提供request_id，处理最新的待执行工具
-            pending_tool = context.pending_tools[-1]
-
+        # 基于 request_id 的权限管理机制
         try:
+            # 记录权限决策
+            context.permission_decisions[request_id] = approved
+
             if approved:
-                # 执行工具
-                result = await pending_tool.callback()
-                pending_tool.status = "approved"
-
-                # 缓存工具执行结果到上下文
-                context.last_tool_result = result
-
-                context.update_state(AgentExecutionState.RUNNING, "继续执行...")
-                logger.info(f"Tool executed successfully: {pending_tool.tool_name} (request_id: {pending_tool.execution_id})")
+                # 用户批准特定工具
+                context.update_state(AgentExecutionState.RUNNING, f"用户已确认工具执行权限 (request_id: {request_id[:8]})")
+                logger.info(f"Permission approved for session: {session_id}, request_id: {request_id}")
             else:
-                # 用户拒绝
-                pending_tool.status = "rejected"
-                context.update_state(AgentExecutionState.PAUSED, f"用户拒绝了工具执行: {pending_tool.tool_name}")
-                logger.info(f"Tool execution rejected: {pending_tool.tool_name} (request_id: {pending_tool.execution_id})")
+                # 用户拒绝特定工具
+                context.update_state(AgentExecutionState.PAUSED, f"用户拒绝了工具执行权限 (request_id: {request_id[:8]})")
+                logger.info(f"Permission denied for session: {session_id}, request_id: {request_id}")
 
             # 记录用户反馈
             if user_feedback:
-                logger.info(f"User feedback for {pending_tool.tool_name}: {user_feedback}")
+                logger.info(f"User feedback for request {request_id}: {user_feedback}")
 
-            # 从待执行列表中移除
-            context.pending_tools.remove(pending_tool)
-
-            # 如果没有更多待确认的工具，设置事件
-            if not context.pending_tools:
-                context.permission_event.set()
-
-            return True
+            # 设置权限事件，唤醒等待的工具执行
+            context.permission_event.set()
+            return True, "权限响应处理成功"
 
         except Exception as e:
             logger.error(f"Error handling permission response: {e}")
-            pending_tool.status = "error"
-            context.update_state(AgentExecutionState.ERROR, f"工具执行错误: {str(e)}")
-            return False
+            context.update_state(AgentExecutionState.ERROR, f"处理权限响应时发生错误: {str(e)}")
+            return False, f"处理权限响应时发生错误: {str(e)}"
 
     async def handle_permission_response_simple_v2(self, session_id: str, approved: bool) -> bool:
         """
@@ -300,7 +282,7 @@ class AgentStateManager:
             approved: 是否批准
 
         Returns:
-            bool: 处理是否成功
+            tuple[bool, str]: (处理是否成功, 错误信息或成功消息)
         """
         context = self.get_execution_context(session_id)
         if not context:
