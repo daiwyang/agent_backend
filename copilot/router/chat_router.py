@@ -13,15 +13,11 @@ from copilot.model.chat_model import (
     ChatHistoryResponse,
     ChatMessage,
     ChatRequest,
-    ChatResponse,
     CreateSessionRequestWithAuth,
     CreateSessionResponse,
+    PermissionResponseRequest,
     SearchRequest,
     SearchResult,
-    SessionInfo,
-    PermissionResponseRequest,
-    ToolPermissionRequestMessage,
-    ToolExecutionStatusMessage,
 )
 
 # 导入简化的服务
@@ -152,7 +148,7 @@ async def chat(
                 "Connection": "keep-alive",
                 "X-Accel-Buffering": "no",
                 "Content-Encoding": "identity",
-                "Transfer-Encoding": "chunked"
+                "Transfer-Encoding": "chunked",
             },
         )
 

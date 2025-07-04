@@ -41,7 +41,7 @@ class ChatStreamHandler:
                             yield "\n\n⏳ 请在聊天界面中确认是否允许执行此工具...\n"
 
                             # 等待用户权限确认
-                            permission_granted = await agent_state_manager.wait_for_permission(session_id, timeout=300)
+                            permission_granted = await agent_state_manager.wait_for_permission(session_id, timeout=30)
 
                             if permission_granted:
                                 yield "✅ 权限已确认，继续执行...\n"

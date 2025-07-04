@@ -295,7 +295,7 @@ class AgentStateManager:
             context.update_state(AgentExecutionState.ERROR, f"工具执行错误: {str(e)}")
             return False
 
-    async def wait_for_permission(self, session_id: str, timeout: int = 300) -> bool:
+    async def wait_for_permission(self, session_id: str, timeout: int = 30) -> bool:
         """
         等待权限确认完成
 
@@ -321,9 +321,66 @@ class AgentStateManager:
             return True
 
         except asyncio.TimeoutError:
-            context.update_state(AgentExecutionState.ERROR, "工具权限确认超时")
-            logger.warning(f"Permission timeout for session: {session_id}")
+            # 处理超时情况
+            await self._handle_permission_timeout(session_id, timeout)
             return False
+
+    async def _handle_permission_timeout(self, session_id: str, timeout: int):
+        """
+        处理权限确认超时
+        
+        Args:
+            session_id: 会话ID
+            timeout: 超时时间（秒）
+        """
+        context = self.get_execution_context(session_id)
+        if not context:
+            return
+
+        try:
+            # 获取所有超时的工具
+            timeout_tools = [tool for tool in context.pending_tools if tool.status == "pending"]
+            
+            if timeout_tools:
+                logger.warning(f"Permission timeout for session {session_id}: {len(timeout_tools)} tools cancelled after {timeout}s")
+                
+                # 导入StreamNotifier以发送取消通知
+                from copilot.core.stream_notifier import StreamNotifier
+                
+                # 为每个超时工具发送取消通知
+                for tool in timeout_tools:
+                    # 更新工具状态为取消
+                    tool.status = "timeout"
+                    
+                    # 发送工具执行状态通知：取消
+                    await StreamNotifier.send_tool_execution_status(
+                        session_id=session_id,
+                        request_id=tool.execution_id,
+                        tool_name=tool.tool_name,
+                        status="cancelled",
+                        error=f"权限请求超时（{timeout}秒），工具执行已取消"
+                    )
+                    
+                    logger.info(f"Tool {tool.tool_name} cancelled due to permission timeout")
+                
+                # 清理所有超时的工具
+                context.pending_tools = [tool for tool in context.pending_tools if tool.status != "timeout"]
+                
+                # 更新执行上下文状态
+                if timeout_tools:
+                    cancelled_names = [tool.tool_name for tool in timeout_tools]
+                    context.update_state(
+                        AgentExecutionState.PAUSED, 
+                        f"权限确认超时，已取消 {len(timeout_tools)} 个工具的执行: {', '.join(cancelled_names)}"
+                    )
+                
+                # 如果没有更多待确认的工具，设置完成事件
+                if not context.pending_tools:
+                    context.permission_event.set()
+
+        except Exception as e:
+            logger.error(f"Error handling permission timeout: {e}")
+            context.update_state(AgentExecutionState.ERROR, f"处理权限超时时发生错误: {str(e)}")
 
     def get_session_status(self, session_id: str) -> Optional[Dict[str, Any]]:
         """获取会话状态"""

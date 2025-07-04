@@ -3,15 +3,15 @@
 提供用户注册、登录、用户信息管理等API端点
 """
 
-from datetime import timedelta, datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from copilot.model.user_model import BaseResponse, UserLoginRequest, UserLoginResponse, UserRegisterRequest, UserResponse, UserUpdateRequest
 from copilot.service.user_service import UserService
 from copilot.utils.auth import get_current_user
-from copilot.utils.logger import logger
 from copilot.utils.error_codes import ErrorCodes, ErrorHandler, raise_auth_error, raise_user_error
+from copilot.utils.logger import logger
 
 # 创建路由器
 router = APIRouter(prefix="/user", tags=["用户管理"])

@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 
 from copilot.mcp_client.mcp_server_manager import mcp_server_manager
 from copilot.middleware.auth_middleware import authentication_middleware
-from copilot.router import chat_router, mcp_router, user_router, agent_management_router
+from copilot.router import agent_management_router, chat_router, mcp_router, user_router
 from copilot.utils.logger import logger
 from copilot.utils.mongo_client import get_mongo_manager
 from copilot.utils.redis_client import close_redis, init_redis
@@ -85,10 +85,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-app.include_router(chat_router.router, prefix="/agent_backend", tags=["agent_backend"])
-app.include_router(user_router.router, prefix="/agent_backend", tags=["用户管理"])
-app.include_router(mcp_router.router, prefix="/agent_backend", tags=["MCP工具"])
-app.include_router(agent_management_router.router, prefix="/agent_backend", tags=["Agent管理"])
+app.include_router(chat_router.router, prefix="/agent_backend")
+app.include_router(user_router.router, prefix="/agent_backend")
+app.include_router(mcp_router.router, prefix="/agent_backend")
+app.include_router(agent_management_router.router, prefix="/agent_backend")
 
 # 添加CORS中间件
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])

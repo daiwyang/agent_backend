@@ -178,3 +178,4 @@ cython_debug/
 logs/
 
 .vscode
+.cursor

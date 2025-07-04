@@ -2,14 +2,15 @@
 Agent管理路由 - 提供Agent状态监控和管理功能
 """
 
+from typing import Any, Dict, List, Optional
+
 from fastapi import APIRouter, HTTPException
-from typing import Dict, Any, List, Optional
 
 from copilot.core.agent_manager import agent_manager
 from copilot.core.agent_state_manager import agent_state_manager
 from copilot.utils.logger import logger
 
-router = APIRouter()
+router = APIRouter(prefix="/agent-management", tags=["Agent管理"])
 
 
 @router.get("/agent-stats")

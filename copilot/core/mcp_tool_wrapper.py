@@ -237,11 +237,7 @@ class MCPToolWrapper:
                 risk_level = tool_info.get("risk_level", "medium") if tool_info else "medium"
                 tool_execution_info["risk_level"] = risk_level
 
-                # 通知前端工具开始执行
-                if session_id:
-                    await StreamNotifier.notify_tool_execution_start(session_id, tool_execution_info)
-
-                # 权限检查逻辑
+                # 权限检查逻辑 - 先检查权限，再发送执行状态
                 if risk_level in ["medium", "high"] and session_id:
                     # 检查或创建执行上下文
                     context = agent_state_manager.get_execution_context(session_id)
@@ -254,6 +250,10 @@ class MCPToolWrapper:
                     # 需要权限确认，创建权限请求
                     async def tool_callback():
                         # 在回调中执行原始工具调用，确保传递config
+                        # 权限批准后才发送执行状态通知
+                        if session_id:
+                            await StreamNotifier.notify_tool_execution_start(session_id, tool_execution_info)
+                        
                         raw_result = await original_arun(*args, **kwargs)
                         
                         # 通知前端工具执行完成
@@ -292,6 +292,10 @@ class MCPToolWrapper:
                         return (message, {"status": "permission_required", "tool_name": tool.name})
 
                 # 权限已确认或低风险工具，直接调用原始工具
+                # 发送执行开始通知
+                if session_id:
+                    await StreamNotifier.notify_tool_execution_start(session_id, tool_execution_info)
+                
                 logger.debug(f"Calling original tool {tool.name} with config: {kwargs.get('config', {})}")
                 raw_result = await original_arun(*args, **kwargs)
                 logger.info(f"Tool {tool.name} executed successfully")
