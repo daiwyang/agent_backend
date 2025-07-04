@@ -17,35 +17,100 @@ class StreamNotifier:
     _pending_messages = {}
 
     @staticmethod
-    def extract_tool_parameters(args) -> Dict[str, Any]:
+    def extract_tool_parameters(args, kwargs=None, tool_name=None) -> Dict[str, Any]:
         """
-        从工具参数中提取可显示的参数信息
+        从工具参数中提取可显示的参数信息 - 增强版本，支持多种参数传递方式
 
         Args:
-            args: 工具调用参数
+            args: 工具调用的位置参数
+            kwargs: 工具调用的关键字参数（可选）
+            tool_name: 工具名称（用于调试）
 
         Returns:
             Dict[str, Any]: 提取的参数信息
         """
         try:
-            if not args:
+            # 详细的调试信息
+            logger.debug(f"Extracting parameters for tool {tool_name}:")
+            logger.debug(f"  args type: {type(args)}")
+            logger.debug(f"  args content: {args}")
+            logger.debug(f"  kwargs type: {type(kwargs)}")
+            logger.debug(f"  kwargs content: {kwargs}")
+            
+            extracted_params = {}
+            
+            # 方式1: 从 args 中提取（优先级最高）
+            if args:
+                logger.debug(f"  Extracting from args...")
+                if len(args) == 1 and isinstance(args[0], dict):
+                    # 单个字典参数
+                    for key, value in args[0].items():
+                        if isinstance(value, str) and len(value) > 200:
+                            extracted_params[key] = f"{value[:200]}... (truncated)"
+                        else:
+                            extracted_params[key] = value
+                    logger.debug(f"  Extracted from single dict arg: {extracted_params}")
+                else:
+                    # 多个参数或非字典参数
+                    extracted_params["args"] = [str(arg)[:100] + "..." if len(str(arg)) > 100 else str(arg) for arg in args]
+                    logger.debug(f"  Extracted from multiple args: {extracted_params}")
+                
+                # 如果从args中提取到参数，直接返回
+                if extracted_params:
+                    logger.debug(f"  Final extracted parameters from args: {extracted_params}")
+                    return extracted_params
+            
+            # 方式2: 检查kwargs中的特殊参数字段（优先于普通kwargs）
+            if kwargs:
+                logger.debug(f"  Checking special parameter fields in kwargs...")
+                common_param_fields = ['input', 'query', 'text', 'data', 'content', 'params', 'parameters']
+                for field in common_param_fields:
+                    if field in kwargs:
+                        param_value = kwargs[field]
+                        if isinstance(param_value, dict):
+                            # 如果参数值是字典，展开其内容
+                            extracted_params.update(param_value)
+                            logger.debug(f"  Extracted and expanded from {field} field: {extracted_params}")
+                        else:
+                            # 如果参数值不是字典，保留字段名
+                            extracted_params[field] = param_value
+                            logger.debug(f"  Extracted from {field} field: {extracted_params}")
+                        
+                        # 找到特殊字段就返回，不继续检查
+                        if extracted_params:
+                            logger.debug(f"  Final extracted parameters from special field: {extracted_params}")
+                            return extracted_params
+            
+            # 方式3: 从普通 kwargs 中提取（最后的选择）
+            if kwargs:
+                logger.debug(f"  Extracting from regular kwargs...")
+                # 过滤掉内部配置参数
+                filtered_kwargs = {}
+                for key, value in kwargs.items():
+                    if key not in ['config', 'run_manager', 'callbacks']:
+                        if isinstance(value, str) and len(value) > 200:
+                            filtered_kwargs[key] = f"{value[:200]}... (truncated)"
+                        else:
+                            filtered_kwargs[key] = value
+                
+                if filtered_kwargs:
+                    extracted_params = filtered_kwargs
+                    logger.debug(f"  Extracted from regular kwargs: {extracted_params}")
+            
+            # 如果仍然没有参数，记录详细信息
+            if not extracted_params:
+                logger.info(f"No parameters extracted for tool {tool_name}")
+                logger.debug(f"  This might be normal for tools with no parameters or using default values")
                 return {}
-
-            if len(args) == 1 and isinstance(args[0], dict):
-                # 过滤掉可能很大的值
-                filtered_params = {}
-                for key, value in args[0].items():
-                    if isinstance(value, str) and len(value) > 200:
-                        filtered_params[key] = f"{value[:200]}... (truncated)"
-                    else:
-                        filtered_params[key] = value
-                return filtered_params
-            else:
-                return {"args": [str(arg)[:100] + "..." if len(str(arg)) > 100 else str(arg) for arg in args]}
+            
+            logger.debug(f"  Final extracted parameters: {extracted_params}")
+            return extracted_params
 
         except Exception as e:
-            logger.warning(f"Error extracting tool parameters: {e}")
-            return {"args": "unable to extract"}
+            logger.warning(f"Error extracting tool parameters for {tool_name}: {e}")
+            logger.debug(f"  args: {args}")
+            logger.debug(f"  kwargs: {kwargs}")
+            return {"args": "parameter extraction failed", "error": str(e)}
 
     @staticmethod
     async def add_stream_message(session_id: str, message):

@@ -210,7 +210,7 @@ class MCPToolWrapper:
             tool_execution_info = {
                 "tool_name": tool.name,
                 "session_id": session_id,
-                "parameters": StreamNotifier.extract_tool_parameters(args),
+                "parameters": StreamNotifier.extract_tool_parameters(args, kwargs, tool.name),
                 "start_time": datetime.now(UTC).isoformat(),
             }
 
@@ -233,13 +233,8 @@ class MCPToolWrapper:
                     # 中高风险工具需要权限确认
                     logger.info(f"Medium/high-risk tool '{tool.name}' requires permission confirmation")
 
-                    # 提取参数用于显示（尽力而为）
-                    display_params = {}
-                    if args:
-                        if isinstance(args[0], dict):
-                            display_params = args[0]
-                        else:
-                            display_params = {"input": str(args[0])}
+                    # 使用已经提取的参数
+                    display_params = tool_execution_info["parameters"]
 
                     # 发送权限请求和等待状态通知，获取request_id
                     request_id = None
@@ -285,13 +280,16 @@ class MCPToolWrapper:
                                 tool_execution_info["request_id"] = request_id
                                 await StreamNotifier.notify_tool_execution_complete(session_id, tool_execution_info, raw_result, success=True)
 
-                            # 🔥 关键修复：返回实际的工具结果给AI模型，而不是状态消息
+                            # 🔥 关键修复：返回格式化结果给模型使用，通过聊天流过滤避免直接显示给用户
                             processed_result = MCPToolWrapper._format_for_ai(tool.name, raw_result)
+                            # 返回二元组格式 (content, raw_output) 满足 response_format='content_and_artifact'
+                            # content包含格式化结果供模型使用，聊天流过滤器会过滤掉工具消息
                             return (processed_result, raw_result)
                         else:
                             logger.info(f"Permission denied or timeout for tool {tool.name} (request_id: {request_id})")
                             error_message = f"工具 {tool.name} 的执行权限被拒绝或超时"
-                            return (error_message, {"status": "permission_denied", "tool_name": tool.name, "request_id": request_id})
+                            # 返回二元组格式满足langchain-mcp-adapters要求，content为空避免聊天流显示
+                            return ("", {"status": "permission_denied", "tool_name": tool.name, "request_id": request_id})
 
                 # 权限已确认或低风险工具，直接调用原始工具
                 # 发送执行开始通知
@@ -306,9 +304,10 @@ class MCPToolWrapper:
                 if session_id:
                     await StreamNotifier.notify_tool_execution_complete(session_id, tool_execution_info, raw_result, success=True)
 
-                # 🔥 关键修复：返回实际的工具结果给AI模型，而不是状态消息
+                # 🔥 关键修复：返回格式化结果给模型使用，通过聊天流过滤避免直接显示给用户
                 processed_result = MCPToolWrapper._format_for_ai(tool.name, raw_result)
-                # 返回二元组格式 (content, raw_output) 以满足 response_format='content_and_artifact'
+                # 返回二元组格式 (content, raw_output) 满足 response_format='content_and_artifact'
+                # content包含格式化结果供模型使用，聊天流过滤器会过滤掉工具消息
                 return (processed_result, raw_result)
 
             except Exception as e:
@@ -331,8 +330,9 @@ class MCPToolWrapper:
                         await StreamNotifier.notify_tool_execution_complete(session_id, tool_execution_info, raw_result, success=True)
 
                     processed_result = MCPToolWrapper._format_for_ai(tool.name, raw_result)
-                    # 返回二元组格式 (content, raw_output) 以满足 response_format='content_and_artifact'
-                    return (processed_result, raw_result)
+                    # 返回二元组格式 (content, raw_output) 满足 response_format='content_and_artifact'
+                    # content 部分设为空字符串，避免在聊天流中显示工具结果
+                    return ("", raw_result)
                 except Exception as orig_e:
                     logger.error(f"Original tool call also failed: {orig_e}")
 
@@ -341,7 +341,7 @@ class MCPToolWrapper:
                         await StreamNotifier.notify_tool_execution_complete(session_id, tool_execution_info, str(orig_e), success=False)
 
                     error_message = f"工具 {tool.name} 执行失败: {str(orig_e)}"
-                    # 返回二元组格式 (content, raw_output) 以满足 response_format='content_and_artifact'
+                    # 返回二元组格式 (content, raw_output) 满足 response_format='content_and_artifact'
                     return (error_message, {"status": "error", "error": str(orig_e)})
 
         # 替换原始的异步执行函数
