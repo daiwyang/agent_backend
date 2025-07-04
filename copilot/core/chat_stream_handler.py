@@ -155,7 +155,7 @@ class ChatStreamHandler:
         """
         self.graph = graph
 
-    async def handle_stream_with_permission(self, inputs: Dict, config: Dict, session_id: Optional[str]) -> AsyncGenerator[str, None]:
+    async def handle_stream_with_permission(self, inputs: Dict, config: Dict, session_id: Optional[str]) -> AsyncGenerator[Dict, None]:
         """带权限处理的流式聊天方法"""
         try:
             from copilot.core.agent_state_manager import AgentExecutionState, agent_state_manager
@@ -176,9 +176,10 @@ class ChatStreamHandler:
 
             async for chunk in self._stream_internal(inputs, config):
                 has_content = True
-
+                
                 # 检查是否遇到权限确认请求
-                if "🔒 等待用户确认执行工具:" in str(chunk):
+                chunk_content = chunk.get("content", "") if isinstance(chunk, dict) else str(chunk)
+                if "🔒 等待用户确认执行工具:" in chunk_content:
                     yield chunk
 
                     # 如果有session_id，等待权限确认
@@ -186,22 +187,22 @@ class ChatStreamHandler:
                         permission_handled = True
                         context = agent_state_manager.get_execution_context(session_id)
                         if context and context.state == AgentExecutionState.WAITING_PERMISSION:
-                            yield "\n\n⏳ 请在聊天界面中确认是否允许执行此工具...\n"
+                            yield {"content": "\n\n⏳ 请在聊天界面中确认是否允许执行此工具...\n", "type": "system"}
 
                             # 等待用户权限确认
                             permission_granted = await agent_state_manager.wait_for_permission(session_id, timeout=30)
 
                             if permission_granted:
-                                yield "✅ 权限已确认，继续执行...\n"
+                                yield {"content": "✅ 权限已确认，继续执行...\n", "type": "system"}
                                 # 继续执行 - 这里可能需要重新调用Agent或恢复执行
                                 # 由于权限确认后工具已经在回调中执行，这里主要是状态同步
                                 context.update_state(AgentExecutionState.COMPLETED)
                             else:
-                                yield "❌ 权限被拒绝或超时，执行已停止。\n"
+                                yield {"content": "❌ 权限被拒绝或超时，执行已停止。\n", "type": "system"}
                                 context.update_state(AgentExecutionState.PAUSED)
                                 break
                 else:
-                    # 直接输出所有内容，不再需要过滤逻辑
+                    # 直接输出所有内容，保持字典格式
                     yield chunk
 
             # 🔥 关键修复：确保执行状态正确结束
@@ -225,10 +226,10 @@ class ChatStreamHandler:
                 if context:
                     context.update_state(AgentExecutionState.ERROR, error=str(e))
 
-            yield f"处理请求时出现错误: {str(e)}"
+            yield {"content": f"处理请求时出现错误: {str(e)}", "type": "error"}
 
-    async def _stream_internal(self, inputs: Dict, config: Dict) -> AsyncGenerator[str, None]:
-        """内部流式聊天方法 - 区分AI思考和正式回答"""
+    async def _stream_internal(self, inputs: Dict, config: Dict) -> AsyncGenerator[Dict, None]:
+        """内部流式聊天方法 - 区分AI思考和正式回答，返回结构化数据"""
         try:
             # 尝试使用流式输出
             async for chunk in self.graph.astream(inputs, config=config, stream_mode="messages"):
@@ -243,20 +244,22 @@ class ChatStreamHandler:
                             message_type = self._classify_ai_message(message_chunk)
 
                             if message_type == "thinking":
-                                # 思考阶段 - 添加思考标识
+                                # 思考阶段
                                 if ChatConfig.ENABLE_AI_THINKING_CLASSIFICATION:
-                                    yield f"{ChatConfig.THINKING_EMOJI} {ChatConfig.THINKING_PREFIX}{content}"
+                                    formatted_content = f"{ChatConfig.THINKING_EMOJI} {ChatConfig.THINKING_PREFIX}{content}"
+                                    yield {"content": formatted_content, "type": "thinking"}
                                 else:
-                                    yield content
+                                    yield {"content": content, "type": "thinking"}
                             elif message_type == "response":
-                                # 正式回答阶段 - 添加回答标识
+                                # 正式回答阶段
                                 if ChatConfig.ENABLE_AI_THINKING_CLASSIFICATION:
-                                    yield f"{ChatConfig.RESPONSE_EMOJI} {ChatConfig.RESPONSE_PREFIX}{content}"
+                                    formatted_content = f"{ChatConfig.RESPONSE_EMOJI} {ChatConfig.RESPONSE_PREFIX}{content}"
+                                    yield {"content": formatted_content, "type": "answer"}
                                 else:
-                                    yield content
+                                    yield {"content": content, "type": "answer"}
                             else:
-                                # 默认输出
-                                yield content
+                                # 默认输出 - 归类为回答
+                                yield {"content": content, "type": "answer"}
             return
         except Exception as e:
             logger.warning(f"Streaming failed: {str(e)}, falling back to chunk mode")
@@ -289,13 +292,16 @@ class ChatStreamHandler:
                                 else:
                                     formatted_content = content
 
+                                chunk_type = "thinking" if message_type == "thinking" else "answer"
+                                
                                 # 简单分块
                                 for i in range(0, len(formatted_content), 30):
-                                    yield formatted_content[i : i + 30]
+                                    chunk_content = formatted_content[i : i + 30]
+                                    yield {"content": chunk_content, "type": chunk_type}
                             return
         except Exception as e:
             logger.error(f"Error in chat_stream: {str(e)}")
-            yield f"处理请求时出现错误: {str(e)}"
+            yield {"content": f"处理请求时出现错误: {str(e)}", "type": "error"}
 
     def _is_ai_message(self, message) -> bool:
         """

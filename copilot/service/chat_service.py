@@ -231,16 +231,30 @@ class ChatService:
             logger.debug(f"Using agent for session {session_info.session_id}: {agent.provider}/{agent.model_name}")
 
             # 使用会话专用Agent进行流式聊天
-            async for content in agent.chat(
+            async for chunk in agent.chat(
                 message=message,
                 thread_id=session_info.thread_id,
                 session_id=session_info.session_id,
                 images=images if images else None,
                 enable_tools=enable_tools,
             ):
-                if content:
-                    yield {"content": content}
-                    full_response += content
+                if chunk:
+                    # 处理字典格式的chunk
+                    if isinstance(chunk, dict):
+                        chunk_content = chunk.get("content", "")
+                        chunk_type = chunk.get("type", "answer")
+                        
+                        if chunk_content:
+                            # 传递完整的chunk信息，包括类型
+                            yield {
+                                "content": chunk_content,
+                                "type": chunk_type
+                            }
+                            full_response += chunk_content
+                    else:
+                        # 兼容旧格式（字符串）
+                        yield {"content": chunk, "type": "answer"}
+                        full_response += chunk
 
             # 计算token使用量并保存对话
             if full_response:
@@ -255,7 +269,7 @@ class ChatService:
 
         except Exception as e:
             logger.error(f"Error in stream chat for session {session_info.session_id}: {str(e)}")
-            yield {"error": "处理请求时出现错误"}
+            yield {"error": "处理请求时出现错误", "type": "error"}
 
     async def _save_conversation(
         self, session_id: str, user_message: str, assistant_message: str, token_usage: Dict[str, int] = None, attachments: List[dict] = None

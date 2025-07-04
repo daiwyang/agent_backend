@@ -146,6 +146,27 @@ class ContentMessage(ChatStreamMessage):
     content: str
 
 
+class ThinkingMessage(ChatStreamMessage):
+    """AI思考消息"""
+
+    type: str = "thinking"
+    content: str
+
+
+class AnswerMessage(ChatStreamMessage):
+    """AI回答消息"""
+
+    type: str = "answer"
+    content: str
+
+
+class SystemMessage(ChatStreamMessage):
+    """系统消息"""
+
+    type: str = "system"
+    content: str
+
+
 class EndMessage(ChatStreamMessage):
     """聊天结束消息"""
 

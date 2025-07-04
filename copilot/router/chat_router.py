@@ -187,6 +187,7 @@ async def _generate_stream_response(request: ChatRequest):
         full_response_buffer = ""  # 用于记录完整回复
         message_ids = None
         ai_response_started = False  # 标记是否已开始AI回复
+        current_message_type = "answer"  # 当前消息类型
 
         # 使用统一的流式聊天方法
         service = await get_chat_service()
@@ -201,8 +202,11 @@ async def _generate_stream_response(request: ChatRequest):
                 yield error_data.encode("utf-8")
                 return
             elif "content" in chunk:
-                content_buffer += chunk["content"]
-                full_response_buffer += chunk["content"]  # 累积完整回复
+                chunk_content = chunk["content"]
+                chunk_type = chunk.get("type", "answer")  # 获取消息类型，默认为answer
+                
+                content_buffer += chunk_content
+                full_response_buffer += chunk_content  # 累积完整回复
 
                 # 🎯 控制台输出：AI回复开始标识（仅首次）
                 if not ai_response_started:
@@ -214,9 +218,12 @@ async def _generate_stream_response(request: ChatRequest):
                     # 🎯 控制台输出：实时流式输出AI回复内容
                     print(content_buffer, end="", flush=True)
 
-                    content_data = json.dumps({"type": "content", "content": content_buffer}) + "\n"
+                    # 根据消息类型设置JSON type字段
+                    json_type = chunk_type  # 可以是 "thinking", "answer", "system", "error"
+                    content_data = json.dumps({"type": json_type, "content": content_buffer}) + "\n"
                     yield content_data.encode("utf-8")
                     content_buffer = ""
+                    current_message_type = chunk_type  # 更新当前消息类型
                     await asyncio.sleep(0)
 
                     # 检查并发送StreamNotifier的待发送消息
@@ -245,7 +252,9 @@ async def _generate_stream_response(request: ChatRequest):
                 ai_response_started = True
             print(content_buffer, end="", flush=True)
 
-            content_data = json.dumps({"type": "content", "content": content_buffer}) + "\n"
+            # 使用最后的消息类型
+            json_type = current_message_type
+            content_data = json.dumps({"type": json_type, "content": content_buffer}) + "\n"
             yield content_data.encode("utf-8")
             full_response_buffer += content_buffer  # 确保剩余内容也被记录
 
