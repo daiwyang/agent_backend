@@ -487,7 +487,7 @@ class AgentStateManager:
             if not context.pending_tools and context.state != AgentExecutionState.WAITING_PERMISSION:
                 logger.debug(f"Timeout but no permission requests for session {session_id}, returning True")
                 return True
-            
+
             # 处理超时情况
             await self._handle_permission_timeout(session_id, timeout)
             return False

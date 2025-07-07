@@ -13,6 +13,7 @@ from copilot.utils.logger import logger
 # 简化配置，只保留基础设置
 class ChatConfig:
     """聊天配置"""
+
     ENABLE_STREAM_NOTIFIER = True  # 是否启用流式通知器
     STREAM_NOTIFIER_TIMEOUT = 5  # 流式通知器超时时间（秒）
 
@@ -122,7 +123,7 @@ class ChatStreamHandler:
                             # 只输出AI助手的消息，过滤掉工具消息
                             if self._is_ai_message(msg):
                                 content = str(msg.content)
-                                
+
                                 # 简单分块
                                 for i in range(0, len(content), 30):
                                     chunk_content = content[i : i + 30]

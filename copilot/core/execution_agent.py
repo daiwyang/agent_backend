@@ -17,7 +17,7 @@ from copilot.utils.logger import logger
 from copilot.utils.token_calculator import TokenCalculator
 
 
-class CoreAgent:
+class ExecutionAgent:
     """核心Agent - 支持多个LLM提供商和MCP工具"""
 
     def __init__(
@@ -64,7 +64,7 @@ class CoreAgent:
         # 初始化LLM
         try:
             self.llm = LLMFactory.create_llm(provider=provider, model=model_name, **llm_kwargs)
-            logger.info(f"CoreAgent initialized with provider: {provider or 'default'}, model: {model_name or 'default'}")
+            logger.info(f"ExecutionAgent initialized with provider: {provider or 'default'}, model: {model_name or 'default'}")
         except Exception as e:
             logger.error(f"Failed to initialize LLM: {str(e)}")
             raise
@@ -86,7 +86,7 @@ class CoreAgent:
         # 当前会话ID（用于MCP工具）
         self._current_session_id = None
 
-        logger.info(f"CoreAgent initialized with max_context_tokens: {self.max_context_tokens}")
+        logger.info(f"ExecutionAgent initialized with max_context_tokens: {self.max_context_tokens}")
 
     @property
     def chat_history_manager(self):
@@ -131,13 +131,13 @@ class CoreAgent:
             **llm_kwargs: 传递给LLM的额外参数
 
         Returns:
-            CoreAgent: 配置好的Agent实例
+            ExecutionAgent: 配置好的Agent实例
         """
         # 获取可用的MCP工具
         mcp_tools = await MCPToolWrapper.get_mcp_tools()
 
         logger.info(
-            f"Creating CoreAgent with provider: {provider}, model: {model_name}, tools: {len(tools) if tools else 0}, mcp_tools: {len(mcp_tools)}, context_memory: {context_memory_enabled}"
+            f"Creating ExecutionAgent with provider: {provider}, model: {model_name}, tools: {len(tools) if tools else 0}, mcp_tools: {len(mcp_tools)}, context_memory: {context_memory_enabled}"
         )
 
         # 创建Agent实例
@@ -392,25 +392,9 @@ class CoreAgent:
         """根据不同的模型获取默认的最大token数量"""
         # 常见模型的上下文窗口大小
         model_limits = {
-            # OpenAI
-            "gpt-4": 8192,
-            "gpt-4-32k": 32768,
-            "gpt-4-turbo": 128000,
-            "gpt-4o": 128000,
-            "gpt-3.5-turbo": 4096,
-            "gpt-3.5-turbo-16k": 16384,
-            # Claude
-            "claude-3-opus": 200000,
-            "claude-3-sonnet": 200000,
-            "claude-3-haiku": 200000,
-            "claude-3.5-sonnet": 200000,
             # DeepSeek
             "deepseek-chat": 32768,
             "deepseek-coder": 16384,
-            # 其他模型
-            "moonshot-v1": 8192,
-            "qwen-max": 8192,
-            "gemini-pro": 32768,
         }
 
         # 尝试精确匹配模型名

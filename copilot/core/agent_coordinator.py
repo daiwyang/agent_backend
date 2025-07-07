@@ -8,7 +8,7 @@ from dataclasses import asdict
 from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
-from copilot.core.agent import CoreAgent
+from copilot.core.execution_agent import ExecutionAgent
 from copilot.core.thinking_agent import ThinkingAgent, ThinkingResult
 from copilot.utils.logger import logger
 
@@ -17,7 +17,7 @@ class AgentCoordinator:
     """Agent协调器 - 管理思考和执行Agent的协作"""
 
     def __init__(
-        self, thinking_agent: ThinkingAgent, execution_agent: CoreAgent, enable_thinking_mode: bool = True, save_thinking_process: bool = True
+        self, thinking_agent: ThinkingAgent, execution_agent: ExecutionAgent, enable_thinking_mode: bool = True, save_thinking_process: bool = True
     ):
         """
         初始化协调器

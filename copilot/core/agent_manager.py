@@ -4,9 +4,10 @@ Agent管理器 - 为每个用户会话维护独立的Agent实例
 """
 
 import asyncio
-from datetime import datetime, UTC, timedelta
-from typing import Dict, Optional, Any, List, Set
-from copilot.core.agent import CoreAgent
+from datetime import UTC, datetime, timedelta
+from typing import Any, Dict, List, Optional, Set
+
+from copilot.core.execution_agent import ExecutionAgent
 from copilot.utils.logger import logger
 
 
@@ -14,7 +15,7 @@ class AgentManager:
     """Agent管理器 - 管理多用户的Agent实例"""
 
     def __init__(self):
-        # session_id -> {"agent": CoreAgent, "created_at": datetime, "last_used": datetime}
+        # session_id -> {"agent": ExecutionAgent, "created_at": datetime, "last_used": datetime}
         self.agents: Dict[str, Dict[str, Any]] = {}
         # session_id -> Set[server_id] 每个Agent使用的MCP服务器
         self.agent_mcp_servers: Dict[str, Set[str]] = {}
@@ -51,7 +52,7 @@ class AgentManager:
         max_history_messages: int = 10,
         max_context_tokens: int = None,
         **llm_kwargs,
-    ) -> CoreAgent:
+    ) -> ExecutionAgent:
         """
         获取指定会话的Agent实例
 
@@ -66,7 +67,7 @@ class AgentManager:
             **llm_kwargs: LLM参数
 
         Returns:
-            CoreAgent: 该会话的专用Agent实例
+            ExecutionAgent: 该会话的专用Agent实例
         """
         current_time = datetime.now(UTC)
 
@@ -91,7 +92,7 @@ class AgentManager:
 
         # 创建新的Agent实例
         logger.info(f"Creating new agent for session: {session_id}")
-        agent = await CoreAgent.create_with_mcp_tools(
+        agent = await ExecutionAgent.create_with_mcp_tools(
             provider=provider,
             model_name=model_name,
             tools=tools,
@@ -145,7 +146,7 @@ class AgentManager:
 
     def _should_update_agent(
         self,
-        agent: CoreAgent,
+        agent: ExecutionAgent,
         provider: Optional[str],
         model_name: Optional[str],
         context_memory_enabled: bool,

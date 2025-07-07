@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List
 
-from copilot.core.agent import CoreAgent
 from copilot.core.agent_coordinator import AgentCoordinator
 from copilot.core.agent_manager import agent_manager
+from copilot.core.execution_agent import ExecutionAgent
 from copilot.core.session_manager import SessionInfo, session_manager
 from copilot.core.thinking_agent import ThinkingAgent
 from copilot.utils.logger import logger
@@ -140,7 +140,7 @@ class ChatService:
         max_history_messages: int = None,
         max_context_tokens: int = None,
         **llm_kwargs,
-    ) -> CoreAgent:
+    ) -> ExecutionAgent:
         """
         获取会话专用的Agent实例 - 从AgentManager获取
 
@@ -155,7 +155,7 @@ class ChatService:
             **llm_kwargs: LLM参数
 
         Returns:
-            CoreAgent: 会话专用的Agent实例
+            ExecutionAgent: 会话专用的Agent实例
         """
         from copilot.core.agent_manager import agent_manager
 
@@ -222,10 +222,7 @@ class ChatService:
 
         try:
             # 创建思考Agent
-            thinking_agent = ThinkingAgent(
-                provider=self.thinking_provider,
-                model_name=self.thinking_model
-            )
+            thinking_agent = ThinkingAgent(provider=self.thinking_provider, model_name=self.thinking_model)
 
             # 获取执行Agent
             execution_agent = await self.get_agent_for_session(
@@ -236,7 +233,7 @@ class ChatService:
                 context_memory_enabled=context_memory_enabled,
                 max_history_messages=max_history_messages,
                 max_context_tokens=max_context_tokens,
-                **llm_kwargs
+                **llm_kwargs,
             )
 
             # 创建协调器
@@ -244,7 +241,7 @@ class ChatService:
                 thinking_agent=thinking_agent,
                 execution_agent=execution_agent,
                 enable_thinking_mode=self.thinking_mode_enabled,
-                save_thinking_process=self.save_thinking_process
+                save_thinking_process=self.save_thinking_process,
             )
 
             # 缓存协调器
@@ -367,12 +364,7 @@ class ChatService:
             coordinator = await self.get_coordinator_for_session(session_id)
 
             # 4. 构建上下文信息
-            context = {
-                "session_id": session_id,
-                "user_id": session_info.user_id,
-                "window_id": session_info.window_id,
-                "attachments": attachments
-            }
+            context = {"session_id": session_id, "user_id": session_info.user_id, "window_id": session_info.window_id, "attachments": attachments}
 
             # 5. 使用协调器处理
             full_response = ""
@@ -381,12 +373,7 @@ class ChatService:
             has_execution = False
 
             async for chunk in coordinator.process_user_input(
-                user_input=message,
-                session_id=session_id,
-                thread_id=session_info.thread_id,
-                images=images,
-                enable_tools=enable_tools,
-                context=context
+                user_input=message, session_id=session_id, thread_id=session_info.thread_id, images=images, enable_tools=enable_tools, context=context
             ):
                 if chunk:
                     chunk_type = chunk.get("type", "content")
@@ -421,15 +408,12 @@ class ChatService:
 
                 # 返回最终统计信息
                 yield {
-                    "finished": True, 
-                    "token_usage": token_usage, 
-                    "total_tokens": token_usage.get("total_tokens", 0), 
+                    "finished": True,
+                    "token_usage": token_usage,
+                    "total_tokens": token_usage.get("total_tokens", 0),
                     "message_ids": message_ids,
                     "thinking_enabled": True,
-                    "phases_completed": {
-                        "thinking": has_thinking,
-                        "execution": has_execution
-                    }
+                    "phases_completed": {"thinking": has_thinking, "execution": has_execution},
                 }
 
             # 7. 更新会话活动时间
@@ -914,11 +898,7 @@ class ChatService:
     # ========== 思考模式相关方法 ==========
 
     def configure_thinking_mode(
-        self, 
-        enabled: bool = True, 
-        thinking_provider: str = "deepseek", 
-        thinking_model: str = "deepseek-chat",
-        save_thinking_process: bool = True
+        self, enabled: bool = True, thinking_provider: str = "deepseek", thinking_model: str = "deepseek-chat", save_thinking_process: bool = True
     ):
         """
         配置全局思考模式设置
@@ -954,7 +934,7 @@ class ChatService:
             "thinking_provider": self.thinking_provider,
             "thinking_model": self.thinking_model,
             "save_thinking_process": self.save_thinking_process,
-            "cached_coordinators": len(self._coordinators)
+            "cached_coordinators": len(self._coordinators),
         }
 
     async def get_session_thinking_info(self, session_id: str) -> Dict[str, Any]:
@@ -976,7 +956,7 @@ class ChatService:
                 "save_thinking_process": self.save_thinking_process,
                 "has_coordinator": session_id in self._coordinators,
                 "thinking_history_count": 0,
-                "latest_thinking": None
+                "latest_thinking": None,
             }
 
             # 如果已有协调器，获取思考历史
@@ -984,14 +964,14 @@ class ChatService:
                 coordinator = self._coordinators[session_id]
                 thinking_history = coordinator.get_thinking_history(session_id)
                 info["thinking_history_count"] = len(thinking_history)
-                
+
                 if thinking_history:
                     latest = thinking_history[-1]
                     info["latest_thinking"] = {
                         "user_intent": latest.user_intent,
                         "estimated_complexity": latest.estimated_complexity,
                         "execution_plan_steps": len(latest.execution_plan),
-                        "timestamp": latest.timestamp.isoformat() if latest.timestamp else None
+                        "timestamp": latest.timestamp.isoformat() if latest.timestamp else None,
                     }
 
                 # 获取协调器统计信息
@@ -1002,11 +982,7 @@ class ChatService:
 
         except Exception as e:
             logger.error(f"Error getting thinking info for session {session_id}: {str(e)}")
-            return {
-                "session_id": session_id,
-                "thinking_mode_enabled": False,
-                "error": str(e)
-            }
+            return {"session_id": session_id, "thinking_mode_enabled": False, "error": str(e)}
 
     async def get_thinking_history(self, session_id: str, limit: int = 10) -> List[Dict[str, Any]]:
         """
@@ -1029,26 +1005,28 @@ class ChatService:
             # 转换为可序列化的格式
             result = []
             for thinking in thinking_history[-limit:]:
-                result.append({
-                    "user_intent": thinking.user_intent,
-                    "problem_analysis": thinking.problem_analysis,
-                    "execution_plan": [
-                        {
-                            "step_id": step.step_id,
-                            "description": step.description,
-                            "reasoning": step.reasoning,
-                            "expected_tools": step.expected_tools,
-                            "parameters": step.parameters,
-                            "priority": step.priority,
-                            "dependencies": step.dependencies
-                        }
-                        for step in thinking.execution_plan
-                    ],
-                    "estimated_complexity": thinking.estimated_complexity,
-                    "suggested_model": thinking.suggested_model,
-                    "context_requirements": thinking.context_requirements,
-                    "timestamp": thinking.timestamp.isoformat() if thinking.timestamp else None
-                })
+                result.append(
+                    {
+                        "user_intent": thinking.user_intent,
+                        "problem_analysis": thinking.problem_analysis,
+                        "execution_plan": [
+                            {
+                                "step_id": step.step_id,
+                                "description": step.description,
+                                "reasoning": step.reasoning,
+                                "expected_tools": step.expected_tools,
+                                "parameters": step.parameters,
+                                "priority": step.priority,
+                                "dependencies": step.dependencies,
+                            }
+                            for step in thinking.execution_plan
+                        ],
+                        "estimated_complexity": thinking.estimated_complexity,
+                        "suggested_model": thinking.suggested_model,
+                        "context_requirements": thinking.context_requirements,
+                        "timestamp": thinking.timestamp.isoformat() if thinking.timestamp else None,
+                    }
+                )
 
             return result
 
@@ -1080,14 +1058,7 @@ class ChatService:
             logger.error(f"Error clearing thinking history for session {session_id}: {str(e)}")
             return False
 
-    async def refine_and_retry(
-        self, 
-        session_id: str, 
-        feedback: str, 
-        original_input: str,
-        attachments: List[dict] = None, 
-        enable_tools: bool = True
-    ):
+    async def refine_and_retry(self, session_id: str, feedback: str, original_input: str, attachments: List[dict] = None, enable_tools: bool = True):
         """
         根据反馈优化计划并重试执行
 
@@ -1123,7 +1094,7 @@ class ChatService:
                 original_input=original_input,
                 thread_id=session_info.thread_id,
                 images=images,
-                enable_tools=enable_tools
+                enable_tools=enable_tools,
             ):
                 if chunk:
                     chunk_type = chunk.get("type", "content")
@@ -1156,7 +1127,7 @@ class ChatService:
                     "token_usage": token_usage,
                     "total_tokens": token_usage.get("total_tokens", 0),
                     "message_ids": message_ids,
-                    "refined_execution": True
+                    "refined_execution": True,
                 }
 
         except Exception as e:
