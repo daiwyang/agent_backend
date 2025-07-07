@@ -4,155 +4,24 @@
 
 from typing import AsyncGenerator, Dict, Optional
 
-from copilot.utils.logger import logger
 from copilot.config.settings import conf
+from copilot.utils.logger import logger
 
 # from copilot.config.settings import Config, ChatConfig
 
 
-# 临时硬编码配置，后续可以从配置文件读取
+# 简化配置，只保留基础设置
 class ChatConfig:
     """聊天配置"""
-
-    ENABLE_AI_THINKING_CLASSIFICATION = True  # 是否启用AI思考和回答分类
-    THINKING_EMOJI = "🤔"  # 思考阶段的表情符号
-    RESPONSE_EMOJI = "💬"  # 回答阶段的表情符号
-    THINKING_PREFIX = "**AI思考中**："  # 思考阶段的前缀
-    RESPONSE_PREFIX = "**AI回答**："  # 回答阶段的前缀
-
-    # 思考模式的关键词 - 包括各种思维过程
-    THINKING_KEYWORDS_ZH = [
-        # 行动规划类
-        "我需要",
-        "让我",
-        "首先",
-        "我应该",
-        "为了回答",
-        "为了获取",
-        "我来",
-        "现在让我",
-        "接下来我",
-        "我想",
-        "我会",
-        "我将",
-        "我要",
-        "我先",
-        "让我们",
-        "我们需要",
-        "我们来",
-        "我们先",
-        "我们应该",
-        # 问题分析类
-        "这个问题",
-        "这里需要考虑",
-        "我们来分析",
-        "让我分析",
-        "分析一下",
-        "考虑到",
-        "需要注意",
-        "值得思考",
-        "关键在于",
-        "问题的核心",
-        # 推理思考类
-        "从逻辑上",
-        "推理过程",
-        "因此可以",
-        "由此可见",
-        "综合考虑",
-        "权衡利弊",
-        "比较分析",
-        "深入思考",
-        "仔细考虑",
-        "进一步分析",
-        # 方案规划类
-        "制定策略",
-        "规划方案",
-        "设计思路",
-        "解决方案",
-        "实现步骤",
-        "具体做法",
-        "采用方法",
-        "选择策略"
-    ]
-
-    THINKING_KEYWORDS_EN = [
-        # Action planning
-        "I need to",
-        "Let me",
-        "I should",
-        "To answer",
-        "In order to",
-        "I'll",
-        "I will",
-        "I want to",
-        "I'm going to",
-        "Let's",
-        "We need to",
-        "We should",
-        "First, I'll",
-        "Now I'll",
-        # Problem analysis
-        "This problem",
-        "We need to consider",
-        "Let me analyze",
-        "Analyzing this",
-        "Considering",
-        "It's important to note",
-        "The key is",
-        "The core issue",
-        "Worth thinking about",
-        # Reasoning process
-        "Logically speaking",
-        "From a logical perspective",
-        "Therefore",
-        "Thus we can",
-        "Given that",
-        "Weighing the options",
-        "Comparing",
-        "Thinking deeper",
-        "Upon reflection",
-        "Further analysis shows"
-    ]
-
-    # 回答模式的关键词
-    RESPONSE_KEYWORDS_ZH = [
-        "根据查询结果",
-        "基于搜索结果",
-        "查询结果显示",
-        "根据工具返回",
-        "基于获取的信息",
-        "从结果中可以看到",
-        "搜索结果表明",
-        "通过查询发现",
-        "根据分析结果",
-        "查询到的信息",
-        "搜索得到",
-        "获取的数据显示",
-    ]
-
-    RESPONSE_KEYWORDS_EN = [
-        "Based on the results",
-        "According to the search",
-        "The results show",
-        "From the search results",
-        "The query returned",
-        "Based on the data",
-        "According to the analysis",
-        "The search revealed",
-        "Results indicate",
-    ]
+    ENABLE_STREAM_NOTIFIER = True  # 是否启用流式通知器
+    STREAM_NOTIFIER_TIMEOUT = 5  # 流式通知器超时时间（秒）
 
 
 class ChatStreamHandler:
-    """聊天流处理器 - 负责处理流式输出和权限确认流程"""
+    """聊天流处理器 - 处理流式聊天输出和权限确认"""
 
     def __init__(self, graph):
-        """
-        初始化聊天流处理器
-
-        Args:
-            graph: LangGraph实例
-        """
+        """初始化聊天流处理器"""
         self.graph = graph
 
     async def handle_stream_with_permission(self, inputs: Dict, config: Dict, session_id: Optional[str]) -> AsyncGenerator[Dict, None]:
@@ -176,7 +45,7 @@ class ChatStreamHandler:
 
             async for chunk in self._stream_internal(inputs, config):
                 has_content = True
-                
+
                 # 检查是否遇到权限确认请求
                 chunk_content = chunk.get("content", "") if isinstance(chunk, dict) else str(chunk)
                 if "🔒 等待用户确认执行工具:" in chunk_content:
@@ -229,7 +98,7 @@ class ChatStreamHandler:
             yield {"content": f"处理请求时出现错误: {str(e)}", "type": "error"}
 
     async def _stream_internal(self, inputs: Dict, config: Dict) -> AsyncGenerator[Dict, None]:
-        """内部流式聊天方法 - 区分AI思考和正式回答，返回结构化数据"""
+        """内部流式聊天方法 - 简化版本，统一输出content类型"""
         try:
             # 尝试使用流式输出
             async for chunk in self.graph.astream(inputs, config=config, stream_mode="messages"):
@@ -239,27 +108,7 @@ class ChatStreamHandler:
                         # 只输出AI助手的消息，过滤掉工具消息
                         if self._is_ai_message(message_chunk):
                             content = str(message_chunk.content)
-
-                            # 检查是否包含工具调用，区分思考和回答
-                            message_type = self._classify_ai_message(message_chunk)
-
-                            if message_type == "thinking":
-                                # 思考阶段
-                                if ChatConfig.ENABLE_AI_THINKING_CLASSIFICATION:
-                                    formatted_content = f"{ChatConfig.THINKING_EMOJI} {ChatConfig.THINKING_PREFIX}{content}"
-                                    yield {"content": formatted_content, "type": "thinking"}
-                                else:
-                                    yield {"content": content, "type": "thinking"}
-                            elif message_type == "response":
-                                # 正式回答阶段
-                                if ChatConfig.ENABLE_AI_THINKING_CLASSIFICATION:
-                                    formatted_content = f"{ChatConfig.RESPONSE_EMOJI} {ChatConfig.RESPONSE_PREFIX}{content}"
-                                    yield {"content": formatted_content, "type": "answer"}
-                                else:
-                                    yield {"content": content, "type": "answer"}
-                            else:
-                                # 默认输出 - 归类为回答
-                                yield {"content": content, "type": "answer"}
+                            yield {"content": content, "type": "content"}
             return
         except Exception as e:
             logger.warning(f"Streaming failed: {str(e)}, falling back to chunk mode")
@@ -273,32 +122,12 @@ class ChatStreamHandler:
                             # 只输出AI助手的消息，过滤掉工具消息
                             if self._is_ai_message(msg):
                                 content = str(msg.content)
-
-                                # 检查是否包含工具调用，区分思考和回答
-                                message_type = self._classify_ai_message(msg)
-
-                                if message_type == "thinking":
-                                    # 思考阶段
-                                    if ChatConfig.ENABLE_AI_THINKING_CLASSIFICATION:
-                                        formatted_content = f"{ChatConfig.THINKING_EMOJI} {ChatConfig.THINKING_PREFIX}{content}"
-                                    else:
-                                        formatted_content = content
-                                elif message_type == "response":
-                                    # 正式回答阶段
-                                    if ChatConfig.ENABLE_AI_THINKING_CLASSIFICATION:
-                                        formatted_content = f"{ChatConfig.RESPONSE_EMOJI} {ChatConfig.RESPONSE_PREFIX}{content}"
-                                    else:
-                                        formatted_content = content
-                                else:
-                                    formatted_content = content
-
-                                chunk_type = "thinking" if message_type == "thinking" else "answer"
                                 
                                 # 简单分块
-                                for i in range(0, len(formatted_content), 30):
-                                    chunk_content = formatted_content[i : i + 30]
-                                    yield {"content": chunk_content, "type": chunk_type}
-                            return
+                                for i in range(0, len(content), 30):
+                                    chunk_content = content[i : i + 30]
+                                    yield {"content": chunk_content, "type": "content"}
+            return
         except Exception as e:
             logger.error(f"Error in chat_stream: {str(e)}")
             yield {"content": f"处理请求时出现错误: {str(e)}", "type": "error"}
@@ -358,68 +187,6 @@ class ChatStreamHandler:
         except Exception as e:
             logger.debug(f"Error checking AI message: {e}")
             return False
-
-    def _classify_ai_message(self, message) -> str:
-        """
-        分类AI消息类型：思考 vs 回答
-
-        Args:
-            message: AI消息对象
-
-        Returns:
-            str: "thinking" | "response" | "default"
-        """
-        try:
-            # 如果未启用分类功能，直接返回默认
-            if not ChatConfig.ENABLE_AI_THINKING_CLASSIFICATION:
-                return "default"
-
-            # 检查消息内容
-            content = str(message.content) if message.content else ""
-            if not content.strip():
-                return "default"
-
-            # 获取所有思考和回答模式的关键词
-            thinking_patterns = ChatConfig.THINKING_KEYWORDS_ZH + ChatConfig.THINKING_KEYWORDS_EN + ["Action:", "Thought:"]  # ReAct模式的特殊标识
-            response_patterns = ChatConfig.RESPONSE_KEYWORDS_ZH + ChatConfig.RESPONSE_KEYWORDS_EN
-
-            # 优先基于内容特征判断
-            # 1. 如果内容包含思考模式关键词，归类为思考
-            if any(pattern in content for pattern in thinking_patterns):
-                logger.debug(f"Message classified as thinking based on content patterns")
-                return "thinking"
-
-            # 2. 如果内容包含回答模式关键词，归类为回答
-            if any(pattern in content for pattern in response_patterns):
-                logger.debug(f"Message classified as response based on content patterns")
-                return "response"
-
-            # 3. 检查是否有工具调用作为辅助判断
-            has_tool_calls = False
-
-            # 检查tool_calls属性
-            if hasattr(message, "tool_calls") and message.tool_calls:
-                has_tool_calls = True
-                logger.debug(f"Found tool_calls in message: {len(message.tool_calls)} calls")
-
-            # 检查additional_kwargs中的tool_calls（OpenAI格式）
-            if hasattr(message, "additional_kwargs") and message.additional_kwargs:
-                if "tool_calls" in message.additional_kwargs and message.additional_kwargs["tool_calls"]:
-                    has_tool_calls = True
-                    logger.debug(f"Found tool_calls in additional_kwargs")
-
-            # 4. 如果有工具调用但没有明确的关键词模式，也倾向于归类为思考
-            # 因为通常在调用工具前AI会有思考过程
-            if has_tool_calls:
-                logger.debug(f"Message classified as thinking due to tool calls")
-                return "thinking"
-
-            # 5. 默认情况 - 普通对话
-            return "default"
-
-        except Exception as e:
-            logger.debug(f"Error classifying AI message: {e}")
-            return "default"
 
     def prepare_config(self, thread_id: Optional[str], session_id: Optional[str]) -> Dict:
         """准备LangGraph配置"""

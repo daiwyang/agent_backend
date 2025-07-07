@@ -187,7 +187,7 @@ async def _generate_stream_response(request: ChatRequest):
         full_response_buffer = ""  # 用于记录完整回复
         message_ids = None
         ai_response_started = False  # 标记是否已开始AI回复
-        current_message_type = "answer"  # 当前消息类型
+        current_message_type = "content"  # 当前消息类型
 
         # 使用统一的流式聊天方法
         service = await get_chat_service()
@@ -203,7 +203,7 @@ async def _generate_stream_response(request: ChatRequest):
                 return
             elif "content" in chunk:
                 chunk_content = chunk["content"]
-                chunk_type = chunk.get("type", "answer")  # 获取消息类型，默认为answer
+                chunk_type = chunk.get("type", "content")  # 获取消息类型，默认为content
                 
                 content_buffer += chunk_content
                 full_response_buffer += chunk_content  # 累积完整回复
@@ -219,7 +219,7 @@ async def _generate_stream_response(request: ChatRequest):
                     print(content_buffer, end="", flush=True)
 
                     # 根据消息类型设置JSON type字段
-                    json_type = chunk_type  # 可以是 "thinking", "answer", "system", "error"
+                    json_type = chunk_type  # 可以是 "content", "system", "error"
                     content_data = json.dumps({"type": json_type, "content": content_buffer}) + "\n"
                     yield content_data.encode("utf-8")
                     content_buffer = ""

@@ -242,7 +242,7 @@ class ChatService:
                     # 处理字典格式的chunk
                     if isinstance(chunk, dict):
                         chunk_content = chunk.get("content", "")
-                        chunk_type = chunk.get("type", "answer")
+                        chunk_type = chunk.get("type", "content")
                         
                         if chunk_content:
                             # 传递完整的chunk信息，包括类型
@@ -253,7 +253,7 @@ class ChatService:
                             full_response += chunk_content
                     else:
                         # 兼容旧格式（字符串）
-                        yield {"content": chunk, "type": "answer"}
+                        yield {"content": chunk, "type": "content"}
                         full_response += chunk
 
             # 计算token使用量并保存对话
