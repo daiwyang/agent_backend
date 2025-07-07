@@ -22,6 +22,7 @@ class ChatRequest(BaseModel):
     message: str
     enable_mcp_tools: Optional[bool] = True  # 默认启用MCP工具
     attachments: Optional[List[dict]] = None  # 多模态附件
+    use_thinking_mode: Optional[bool] = None  # 是否使用思考模式，None表示使用默认配置
 
 
 class ChatResponse(BaseModel):

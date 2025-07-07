@@ -297,6 +297,25 @@ class MCPToolWrapper:
                     await StreamNotifier.notify_tool_execution_start(session_id, tool_execution_info)
 
                 logger.debug(f"Calling original tool {tool.name} with config: {kwargs.get('config', {})}")
+                
+                # 添加预检查逻辑
+                try:
+                    # 检查工具是否有必要的属性
+                    if not hasattr(tool, '_arun') and not hasattr(tool, 'arun'):
+                        raise AttributeError(f"Tool {tool.name} missing async execution method")
+                    
+                    # 记录调用前的状态
+                    logger.debug(f"Tool {tool.name} pre-execution check passed")
+                    logger.debug(f"Args: {args}, Kwargs keys: {list(kwargs.keys())}")
+                    
+                    # 检查原始工具函数是否可调用
+                    if not callable(original_arun):
+                        raise TypeError(f"Original arun for tool {tool.name} is not callable")
+                        
+                except Exception as check_e:
+                    logger.error(f"Pre-execution check failed for tool {tool.name}: {check_e}")
+                    raise check_e
+                
                 raw_result = await original_arun(*args, **kwargs)
                 logger.info(f"Tool {tool.name} executed successfully")
 
@@ -312,6 +331,7 @@ class MCPToolWrapper:
 
             except Exception as e:
                 logger.error(f"Exception in wrapped tool {tool.name}: {e}")
+                logger.error(f"Exception details: {type(e).__name__}: {str(e)}")
                 logger.debug(traceback.format_exc())
 
                 # 通知前端工具执行失败
@@ -323,6 +343,7 @@ class MCPToolWrapper:
                     if "config" not in kwargs:
                         kwargs["config"] = {}
                     logger.warning(f"Falling back to original tool call for {tool.name}")
+                    logger.debug(f"Fallback kwargs: {kwargs}")
                     raw_result = await original_arun(*args, **kwargs)
 
                     # 通知前端重试成功
@@ -335,6 +356,8 @@ class MCPToolWrapper:
                     return ("", raw_result)
                 except Exception as orig_e:
                     logger.error(f"Original tool call also failed: {orig_e}")
+                    logger.error(f"Original exception details: {type(orig_e).__name__}: {str(orig_e)}")
+                    logger.debug(f"Original tool traceback: {traceback.format_exc()}")
 
                     # 通知前端最终失败
                     if session_id:

@@ -7,8 +7,10 @@ from datetime import datetime
 from typing import Any, Dict, List
 
 from copilot.core.agent import CoreAgent
+from copilot.core.agent_coordinator import AgentCoordinator
 from copilot.core.agent_manager import agent_manager
 from copilot.core.session_manager import SessionInfo, session_manager
+from copilot.core.thinking_agent import ThinkingAgent
 from copilot.utils.logger import logger
 from copilot.utils.token_calculator import TokenCalculator, TokenUsage
 
@@ -51,6 +53,15 @@ class ChatService:
         self.default_max_history_messages = 10
         self.default_max_context_tokens = None
 
+        # 思考模式配置
+        self.thinking_mode_enabled = True
+        self.thinking_provider = "deepseek"  # 思考Agent使用的提供商
+        self.thinking_model = "deepseek-chat"  # 思考Agent使用的模型
+        self.save_thinking_process = True
+
+        # AgentCoordinator缓存
+        self._coordinators = {}  # session_id -> AgentCoordinator
+
     @classmethod
     async def create(
         cls,
@@ -60,6 +71,10 @@ class ChatService:
         context_memory_enabled: bool = True,
         max_history_messages: int = 10,
         max_context_tokens: int = None,
+        thinking_mode_enabled: bool = True,
+        thinking_provider: str = "deepseek",
+        thinking_model: str = "deepseek-chat",
+        save_thinking_process: bool = True,
         **llm_kwargs,
     ):
         """
@@ -72,6 +87,10 @@ class ChatService:
             context_memory_enabled: 是否启用上下文记忆
             max_history_messages: 最大历史消息数量
             max_context_tokens: 最大上下文token数量
+            thinking_mode_enabled: 是否启用思考模式
+            thinking_provider: 思考Agent的提供商
+            thinking_model: 思考Agent的模型
+            save_thinking_process: 是否保存思考过程
             **llm_kwargs: 传递给LLM的额外参数
         """
         service = cls()
@@ -85,9 +104,16 @@ class ChatService:
         service.default_max_history_messages = max_history_messages
         service.default_max_context_tokens = max_context_tokens
 
+        # 配置思考模式
+        service.thinking_mode_enabled = thinking_mode_enabled
+        service.thinking_provider = thinking_provider
+        service.thinking_model = thinking_model
+        service.save_thinking_process = save_thinking_process
+
         logger.info(
             f"ChatService created with default provider: {provider}, model: {model_name}, "
-            f"context_memory: {context_memory_enabled}, max_history: {max_history_messages}, max_tokens: {max_context_tokens}"
+            f"context_memory: {context_memory_enabled}, max_history: {max_history_messages}, max_tokens: {max_context_tokens}, "
+            f"thinking_mode: {thinking_mode_enabled}, thinking_model: {thinking_provider}/{thinking_model}"
         )
         return service
 
@@ -163,6 +189,74 @@ class ChatService:
 
         return agent
 
+    async def get_coordinator_for_session(
+        self,
+        session_id: str,
+        provider: str = None,
+        model_name: str = None,
+        tools: List = None,
+        context_memory_enabled: bool = None,
+        max_history_messages: int = None,
+        max_context_tokens: int = None,
+        **llm_kwargs,
+    ) -> AgentCoordinator:
+        """
+        获取会话专用的AgentCoordinator实例
+
+        Args:
+            session_id: 会话ID
+            provider: 执行Agent的LLM提供商
+            model_name: 执行Agent的模型名称
+            tools: 工具列表
+            context_memory_enabled: 是否启用上下文记忆
+            max_history_messages: 最大历史消息数量
+            max_context_tokens: 最大上下文token数量
+            **llm_kwargs: LLM参数
+
+        Returns:
+            AgentCoordinator: 会话专用的协调器实例
+        """
+        # 如果缓存中已有该会话的协调器，直接返回
+        if session_id in self._coordinators:
+            return self._coordinators[session_id]
+
+        try:
+            # 创建思考Agent
+            thinking_agent = ThinkingAgent(
+                provider=self.thinking_provider,
+                model_name=self.thinking_model
+            )
+
+            # 获取执行Agent
+            execution_agent = await self.get_agent_for_session(
+                session_id=session_id,
+                provider=provider,
+                model_name=model_name,
+                tools=tools,
+                context_memory_enabled=context_memory_enabled,
+                max_history_messages=max_history_messages,
+                max_context_tokens=max_context_tokens,
+                **llm_kwargs
+            )
+
+            # 创建协调器
+            coordinator = AgentCoordinator(
+                thinking_agent=thinking_agent,
+                execution_agent=execution_agent,
+                enable_thinking_mode=self.thinking_mode_enabled,
+                save_thinking_process=self.save_thinking_process
+            )
+
+            # 缓存协调器
+            self._coordinators[session_id] = coordinator
+
+            logger.debug(f"Created AgentCoordinator for session {session_id}")
+            return coordinator
+
+        except Exception as e:
+            logger.error(f"Failed to create AgentCoordinator for session {session_id}: {str(e)}")
+            raise
+
     async def get_provider_info(self, session_id: str = None) -> Dict[str, Any]:
         """
         获取提供商信息
@@ -223,18 +317,140 @@ class ChatService:
 
         return LLMProviderManager.get_provider_recommendations()
 
-    async def chat(self, session_id: str, message: str, attachments: List[dict] = None, enable_tools: bool = True):
+    async def chat(self, session_id: str, message: str, attachments: List[dict] = None, enable_tools: bool = True, use_thinking_mode: bool = None):
         """
-        统一的流式聊天接口，支持多模态、工具调用
+        智能聊天接口 - 支持思考-执行双Agent模式
 
         Args:
             session_id: 会话ID
             message: 用户消息
             attachments: 附件列表（包含图片等）
             enable_tools: 是否启用工具调用
+            use_thinking_mode: 是否使用思考模式，None表示使用默认配置
 
         Yields:
             Dict: 响应数据，包含content、finished、error等字段
+        """
+        # 决定是否使用思考模式
+        thinking_enabled = use_thinking_mode if use_thinking_mode is not None else self.thinking_mode_enabled
+
+        if thinking_enabled:
+            # 使用思考-执行双Agent模式
+            async for chunk in self._chat_with_thinking(session_id, message, attachments, enable_tools):
+                yield chunk
+        else:
+            # 使用传统单Agent模式
+            async for chunk in self._chat_legacy(session_id, message, attachments, enable_tools):
+                yield chunk
+
+    async def _chat_with_thinking(self, session_id: str, message: str, attachments: List[dict] = None, enable_tools: bool = True):
+        """
+        使用思考-执行双Agent模式的聊天
+
+        Args:
+            session_id: 会话ID
+            message: 用户消息
+            attachments: 附件列表
+            enable_tools: 是否启用工具调用
+
+        Yields:
+            Dict: 响应数据
+        """
+        try:
+            # 1. 验证会话
+            session_info = await self._validate_session(session_id)
+
+            # 2. 预处理输入
+            images = self._extract_images(attachments)
+
+            # 3. 获取协调器
+            coordinator = await self.get_coordinator_for_session(session_id)
+
+            # 4. 构建上下文信息
+            context = {
+                "session_id": session_id,
+                "user_id": session_info.user_id,
+                "window_id": session_info.window_id,
+                "attachments": attachments
+            }
+
+            # 5. 使用协调器处理
+            full_response = ""
+            token_usage = None
+            has_thinking = False
+            has_execution = False
+
+            async for chunk in coordinator.process_user_input(
+                user_input=message,
+                session_id=session_id,
+                thread_id=session_info.thread_id,
+                images=images,
+                enable_tools=enable_tools,
+                context=context
+            ):
+                if chunk:
+                    chunk_type = chunk.get("type", "content")
+                    chunk_phase = chunk.get("phase", "unknown")
+                    chunk_content = chunk.get("content", "")
+
+                    # 传递所有chunk信息给前端
+                    yield chunk
+
+                    # 记录阶段状态
+                    if chunk_phase == "thinking":
+                        has_thinking = True
+                    elif chunk_phase == "execution":
+                        has_execution = True
+
+                    # 收集执行阶段的内容用于保存
+                    if chunk_phase == "execution" and chunk_content:
+                        full_response += chunk_content
+
+                    # 处理token使用信息
+                    if chunk_type == "tool_result" and chunk.get("token_usage"):
+                        token_usage = chunk.get("token_usage")
+
+            # 6. 保存对话（只保存执行阶段的内容）
+            if full_response:
+                # 如果协调器没有提供token信息，手动估算
+                if not token_usage:
+                    execution_agent = coordinator.execution_agent
+                    token_usage = execution_agent._estimate_token_usage(message, full_response)
+
+                message_ids = await self._save_conversation(session_id, message, full_response, token_usage, attachments)
+
+                # 返回最终统计信息
+                yield {
+                    "finished": True, 
+                    "token_usage": token_usage, 
+                    "total_tokens": token_usage.get("total_tokens", 0), 
+                    "message_ids": message_ids,
+                    "thinking_enabled": True,
+                    "phases_completed": {
+                        "thinking": has_thinking,
+                        "execution": has_execution
+                    }
+                }
+
+            # 7. 更新会话活动时间
+            await session_manager.get_session(session_info.session_id)
+
+        except Exception as e:
+            logger.error(f"Error in thinking chat for session {session_id}: {str(e)}")
+            yield {"error": f"思考模式处理出错: {str(e)}", "type": "error"}
+
+    async def _chat_legacy(self, session_id: str, message: str, attachments: List[dict] = None, enable_tools: bool = True):
+        """
+        传统单Agent模式的聊天（保持原有逻辑）
+
+        Args:
+            session_id: 会话ID
+            message: 用户消息
+            attachments: 附件列表
+            enable_tools: 是否启用工具调用
+
+        Yields:
+            Dict: 响应数据
         """
         # 1. 验证会话
         session_info = await self._validate_session(session_id)
@@ -694,3 +910,283 @@ class ChatService:
         except Exception as e:
             logger.error(f"Error getting context memory info for session {session_id}: {str(e)}")
             return {"context_memory_enabled": False, "max_history_messages": 0, "actual_history_count": 0, "error": str(e)}
+
+    # ========== 思考模式相关方法 ==========
+
+    def configure_thinking_mode(
+        self, 
+        enabled: bool = True, 
+        thinking_provider: str = "deepseek", 
+        thinking_model: str = "deepseek-chat",
+        save_thinking_process: bool = True
+    ):
+        """
+        配置全局思考模式设置
+
+        Args:
+            enabled: 是否启用思考模式
+            thinking_provider: 思考Agent的提供商
+            thinking_model: 思考Agent的模型
+            save_thinking_process: 是否保存思考过程
+        """
+        self.thinking_mode_enabled = enabled
+        self.thinking_provider = thinking_provider
+        self.thinking_model = thinking_model
+        self.save_thinking_process = save_thinking_process
+
+        # 清除现有的协调器缓存，强制重新创建
+        self._coordinators.clear()
+
+        logger.info(
+            f"Global thinking mode configured: enabled={enabled}, "
+            f"model={thinking_provider}/{thinking_model}, save_process={save_thinking_process}"
+        )
+
+    def get_thinking_mode_config(self) -> Dict[str, Any]:
+        """
+        获取思考模式配置信息
+
+        Returns:
+            Dict[str, Any]: 思考模式配置信息
+        """
+        return {
+            "thinking_mode_enabled": self.thinking_mode_enabled,
+            "thinking_provider": self.thinking_provider,
+            "thinking_model": self.thinking_model,
+            "save_thinking_process": self.save_thinking_process,
+            "cached_coordinators": len(self._coordinators)
+        }
+
+    async def get_session_thinking_info(self, session_id: str) -> Dict[str, Any]:
+        """
+        获取指定会话的思考模式信息
+
+        Args:
+            session_id: 会话ID
+
+        Returns:
+            Dict[str, Any]: 包含思考配置和历史信息
+        """
+        try:
+            info = {
+                "session_id": session_id,
+                "thinking_mode_enabled": self.thinking_mode_enabled,
+                "thinking_provider": self.thinking_provider,
+                "thinking_model": self.thinking_model,
+                "save_thinking_process": self.save_thinking_process,
+                "has_coordinator": session_id in self._coordinators,
+                "thinking_history_count": 0,
+                "latest_thinking": None
+            }
+
+            # 如果已有协调器，获取思考历史
+            if session_id in self._coordinators:
+                coordinator = self._coordinators[session_id]
+                thinking_history = coordinator.get_thinking_history(session_id)
+                info["thinking_history_count"] = len(thinking_history)
+                
+                if thinking_history:
+                    latest = thinking_history[-1]
+                    info["latest_thinking"] = {
+                        "user_intent": latest.user_intent,
+                        "estimated_complexity": latest.estimated_complexity,
+                        "execution_plan_steps": len(latest.execution_plan),
+                        "timestamp": latest.timestamp.isoformat() if latest.timestamp else None
+                    }
+
+                # 获取协调器统计信息
+                coordinator_stats = coordinator.get_coordinator_stats()
+                info["coordinator_stats"] = coordinator_stats
+
+            return info
+
+        except Exception as e:
+            logger.error(f"Error getting thinking info for session {session_id}: {str(e)}")
+            return {
+                "session_id": session_id,
+                "thinking_mode_enabled": False,
+                "error": str(e)
+            }
+
+    async def get_thinking_history(self, session_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        获取会话的思考历史
+
+        Args:
+            session_id: 会话ID
+            limit: 返回的历史记录数量限制
+
+        Returns:
+            List[Dict[str, Any]]: 思考历史记录
+        """
+        try:
+            if session_id not in self._coordinators:
+                return []
+
+            coordinator = self._coordinators[session_id]
+            thinking_history = coordinator.get_thinking_history(session_id)
+
+            # 转换为可序列化的格式
+            result = []
+            for thinking in thinking_history[-limit:]:
+                result.append({
+                    "user_intent": thinking.user_intent,
+                    "problem_analysis": thinking.problem_analysis,
+                    "execution_plan": [
+                        {
+                            "step_id": step.step_id,
+                            "description": step.description,
+                            "reasoning": step.reasoning,
+                            "expected_tools": step.expected_tools,
+                            "parameters": step.parameters,
+                            "priority": step.priority,
+                            "dependencies": step.dependencies
+                        }
+                        for step in thinking.execution_plan
+                    ],
+                    "estimated_complexity": thinking.estimated_complexity,
+                    "suggested_model": thinking.suggested_model,
+                    "context_requirements": thinking.context_requirements,
+                    "timestamp": thinking.timestamp.isoformat() if thinking.timestamp else None
+                })
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Error getting thinking history for session {session_id}: {str(e)}")
+            return []
+
+    async def clear_thinking_history(self, session_id: str) -> bool:
+        """
+        清除会话的思考历史
+
+        Args:
+            session_id: 会话ID
+
+        Returns:
+            bool: 是否成功清除
+        """
+        try:
+            if session_id in self._coordinators:
+                coordinator = self._coordinators[session_id]
+                coordinator.clear_thinking_history(session_id)
+                logger.info(f"Cleared thinking history for session {session_id}")
+                return True
+            else:
+                logger.warning(f"No coordinator found for session {session_id}")
+                return True  # 没有协调器也算成功
+
+        except Exception as e:
+            logger.error(f"Error clearing thinking history for session {session_id}: {str(e)}")
+            return False
+
+    async def refine_and_retry(
+        self, 
+        session_id: str, 
+        feedback: str, 
+        original_input: str,
+        attachments: List[dict] = None, 
+        enable_tools: bool = True
+    ):
+        """
+        根据反馈优化计划并重试执行
+
+        Args:
+            session_id: 会话ID
+            feedback: 用户反馈或错误信息
+            original_input: 原始用户输入
+            attachments: 附件列表
+            enable_tools: 是否启用工具
+
+        Yields:
+            Dict: 响应数据
+        """
+        try:
+            # 验证会话
+            session_info = await self._validate_session(session_id)
+
+            # 获取协调器
+            if session_id not in self._coordinators:
+                yield {"error": "该会话尚未使用思考模式，无法进行优化重试", "type": "error"}
+                return
+
+            coordinator = self._coordinators[session_id]
+            images = self._extract_images(attachments)
+
+            # 使用协调器进行优化重试
+            full_response = ""
+            token_usage = None
+
+            async for chunk in coordinator.refine_and_retry(
+                session_id=session_id,
+                feedback=feedback,
+                original_input=original_input,
+                thread_id=session_info.thread_id,
+                images=images,
+                enable_tools=enable_tools
+            ):
+                if chunk:
+                    chunk_type = chunk.get("type", "content")
+                    chunk_phase = chunk.get("phase", "unknown")
+                    chunk_content = chunk.get("content", "")
+
+                    # 传递所有chunk信息给前端
+                    yield chunk
+
+                    # 收集执行阶段的内容用于保存
+                    if chunk_phase in ["retry_execution"] and chunk_content:
+                        full_response += chunk_content
+
+                    # 处理token使用信息
+                    if chunk_type == "tool_result" and chunk.get("token_usage"):
+                        token_usage = chunk.get("token_usage")
+
+            # 保存重试后的对话
+            if full_response:
+                # 如果协调器没有提供token信息，手动估算
+                if not token_usage:
+                    execution_agent = coordinator.execution_agent
+                    token_usage = execution_agent._estimate_token_usage(original_input, full_response)
+
+                message_ids = await self._save_conversation(session_id, original_input, full_response, token_usage, attachments)
+
+                # 返回最终统计信息
+                yield {
+                    "finished": True,
+                    "token_usage": token_usage,
+                    "total_tokens": token_usage.get("total_tokens", 0),
+                    "message_ids": message_ids,
+                    "refined_execution": True
+                }
+
+        except Exception as e:
+            logger.error(f"Error in refine and retry for session {session_id}: {str(e)}")
+            yield {"error": f"优化重试出错: {str(e)}", "type": "error"}
+
+    async def reload_coordinator(self, session_id: str = None) -> bool:
+        """
+        重新加载协调器（当配置变更时）
+
+        Args:
+            session_id: 指定会话ID，如果为None则重新加载所有协调器
+
+        Returns:
+            bool: 是否成功重新加载
+        """
+        try:
+            if session_id:
+                # 重新加载指定会话的协调器
+                if session_id in self._coordinators:
+                    del self._coordinators[session_id]
+                    logger.info(f"Removed coordinator for session {session_id}, will recreate on next request")
+                return True
+            else:
+                # 重新加载所有协调器
+                coordinator_count = len(self._coordinators)
+                self._coordinators.clear()
+                logger.info(f"Cleared all {coordinator_count} coordinators, will recreate on next request")
+                return True
+
+        except Exception as e:
+            logger.error(f"Failed to reload coordinator for session {session_id}: {str(e)}")
+            return False

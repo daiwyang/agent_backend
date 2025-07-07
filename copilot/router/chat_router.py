@@ -192,7 +192,11 @@ async def _generate_stream_response(request: ChatRequest):
         # 使用统一的流式聊天方法
         service = await get_chat_service()
         async for chunk in service.chat(
-            session_id=request.session_id, message=request.message, attachments=request.attachments, enable_tools=request.enable_mcp_tools
+            session_id=request.session_id, 
+            message=request.message, 
+            attachments=request.attachments, 
+            enable_tools=request.enable_mcp_tools,
+            use_thinking_mode=request.use_thinking_mode
         ):
             if "error" in chunk:
                 # 🎯 控制台输出：记录聊天错误
@@ -557,33 +561,44 @@ async def get_session_context_memory_info(
 async def get_context_memory_config(
     current_user: dict = Depends(get_current_user_from_state),
 ):
-    """获取全局上下文记忆配置"""
+    """获取全局上下文记忆和思考模式配置"""
     try:
         service = await get_chat_service()
-        config = service.get_context_memory_config()
+        memory_config = service.get_context_memory_config()
+        thinking_config = service.get_thinking_mode_config()
         
         return {
-            "message": "上下文记忆配置信息",
-            "config": config
+            "message": "配置信息",
+            "config": {
+                "context_memory": memory_config,
+                "thinking_mode": thinking_config
+            }
         }
 
     except Exception as e:
-        raise ErrorHandler.handle_system_error(e, "获取记忆配置")
+        raise ErrorHandler.handle_system_error(e, "获取配置")
 
 
 @router.post("/context-memory/configure")
 async def configure_context_memory(
-    config: dict,  # {"enabled": bool, "max_history_messages": int}
+    config: dict,  # {"enabled": bool, "max_history_messages": int, "thinking_mode_enabled": bool, "thinking_provider": str, "thinking_model": str}
     current_user: dict = Depends(get_current_user_from_state),
 ):
-    """配置全局上下文记忆设置（需要管理员权限）"""
+    """配置全局上下文记忆和思考模式设置"""
     try:
         # 这里可以添加管理员权限检查
         # if not current_user.get("is_admin"):
         #     raise_validation_error("需要管理员权限")
 
+        # 上下文记忆配置
         enabled = config.get("enabled", True)
         max_history_messages = config.get("max_history_messages", 10)
+
+        # 思考模式配置
+        thinking_mode_enabled = config.get("thinking_mode_enabled", True)
+        thinking_provider = config.get("thinking_provider", "deepseek")
+        thinking_model = config.get("thinking_model", "deepseek-chat")
+        save_thinking_process = config.get("save_thinking_process", True)
 
         # 验证参数
         if not isinstance(enabled, bool):
@@ -595,22 +610,47 @@ async def configure_context_memory(
         if max_history_messages > 50:
             raise_validation_error("max_history_messages不能超过50")
 
+        if not isinstance(thinking_mode_enabled, bool):
+            raise_validation_error("thinking_mode_enabled参数必须是布尔值")
+        
+        if not isinstance(thinking_provider, str) or not thinking_provider:
+            raise_validation_error("thinking_provider参数必须是非空字符串")
+        
+        if not isinstance(thinking_model, str) or not thinking_model:
+            raise_validation_error("thinking_model参数必须是非空字符串")
+
         # 配置记忆设置
         service = await get_chat_service()
         service.configure_context_memory(enabled, max_history_messages)
+        
+        # 配置思考模式
+        service.configure_thinking_mode(
+            enabled=thinking_mode_enabled,
+            thinking_provider=thinking_provider,
+            thinking_model=thinking_model,
+            save_thinking_process=save_thinking_process
+        )
 
         return {
-            "message": "上下文记忆配置已更新",
+            "message": "配置已更新",
             "config": {
-                "enabled": enabled,
-                "max_history_messages": max_history_messages
+                "context_memory": {
+                    "enabled": enabled,
+                    "max_history_messages": max_history_messages
+                },
+                "thinking_mode": {
+                    "enabled": thinking_mode_enabled,
+                    "thinking_provider": thinking_provider,
+                    "thinking_model": thinking_model,
+                    "save_thinking_process": save_thinking_process
+                }
             }
         }
 
     except HTTPException:
         raise
     except Exception as e:
-        raise ErrorHandler.handle_system_error(e, "配置记忆设置")
+        raise ErrorHandler.handle_system_error(e, "配置设置")
 
 
 @router.get("/sessions/{session_id}/agent-info")
@@ -618,7 +658,7 @@ async def get_session_agent_info(
     session_id: str,
     current_user: dict = Depends(get_current_user_from_state),
 ):
-    """获取会话的Agent详细信息，包括记忆配置"""
+    """获取会话的Agent详细信息，包括记忆配置和思考模式信息"""
     try:
         # 验证session属于当前用户
         user_id = current_user.get("user_id")
@@ -640,6 +680,9 @@ async def get_session_agent_info(
         # 获取记忆信息
         memory_info = await service.get_session_context_memory_info(session_id)
         
+        # 获取思考信息
+        thinking_info = await service.get_session_thinking_info(session_id)
+        
         # 获取提供商信息
         provider_info = await service.get_provider_info(session_id)
 
@@ -649,6 +692,7 @@ async def get_session_agent_info(
                 "provider": agent.provider,
                 "model": agent.model_name,
                 "context_memory": memory_info,
+                "thinking_mode": thinking_info,
                 "provider_info": provider_info
             }
         }
@@ -657,3 +701,6 @@ async def get_session_agent_info(
         raise
     except Exception as e:
         raise ErrorHandler.handle_system_error(e, "获取Agent信息")
+
+
+
