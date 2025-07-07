@@ -121,6 +121,85 @@ class AgentManager:
         )
         return agent
 
+    async def get_coordinator(
+        self,
+        session_id: str,
+        thinking_provider: Optional[str] = None,
+        thinking_model: Optional[str] = None,
+        execution_provider: Optional[str] = None,
+        execution_model: Optional[str] = None,
+        enable_thinking_mode: bool = True,
+        save_thinking_process: bool = True,
+        **llm_kwargs,
+    ):
+        """
+        获取指定会话的AgentCoordinator实例
+
+        Args:
+            session_id: 会话ID
+            thinking_provider: 思考Agent的LLM提供商
+            thinking_model: 思考Agent的模型名称
+            execution_provider: 执行Agent的LLM提供商
+            execution_model: 执行Agent的模型名称
+            enable_thinking_mode: 是否启用思考模式
+            save_thinking_process: 是否保存思考过程
+            **llm_kwargs: LLM参数
+
+        Returns:
+            AgentCoordinator: 该会话的专用协调器实例
+        """
+        current_time = datetime.now(UTC)
+
+        # 检查是否已存在该会话的协调器
+        if session_id in self.agents:
+            agent_info = self.agents[session_id]
+            agent_info["last_used"] = current_time
+
+            # 如果已经有协调器，直接返回
+            if "coordinator" in agent_info:
+                logger.debug(f"Reusing existing coordinator for session: {session_id}")
+                return agent_info["coordinator"]
+
+        # 检查是否需要清理以腾出空间
+        if len(self.agents) >= self.max_agents:
+            await self._cleanup_oldest_agents(10)  # 清理10个最旧的Agent
+
+        # 创建新的协调器实例
+        logger.info(f"Creating new coordinator for session: {session_id}")
+        
+        from copilot.core.agent_coordinator import AgentCoordinator
+        coordinator = await AgentCoordinator.create_with_mcp_tools(
+            thinking_provider=thinking_provider or "deepseek",
+            thinking_model=thinking_model or "deepseek-chat",
+            execution_provider=execution_provider or "deepseek",
+            execution_model=execution_model or "deepseek-chat",
+            enable_thinking_mode=enable_thinking_mode,
+            save_thinking_process=save_thinking_process,
+            **llm_kwargs,
+        )
+
+        # 存储协调器实例
+        if session_id not in self.agents:
+            self.agents[session_id] = {}
+        
+        self.agents[session_id].update({
+            "coordinator": coordinator,
+            "created_at": current_time,
+            "last_used": current_time,
+            "thinking_provider": thinking_provider,
+            "thinking_model": thinking_model,
+            "execution_provider": execution_provider,
+            "execution_model": execution_model,
+            "enable_thinking_mode": enable_thinking_mode,
+            "save_thinking_process": save_thinking_process,
+            "llm_kwargs": llm_kwargs,
+        })
+
+        logger.info(
+            f"Created coordinator for session {session_id} with thinking_mode={enable_thinking_mode}"
+        )
+        return coordinator
+
     async def remove_agent(self, session_id: str) -> bool:
         """
         移除指定会话的Agent实例

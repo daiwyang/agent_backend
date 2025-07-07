@@ -221,33 +221,24 @@ class ChatService:
             return self._coordinators[session_id]
 
         try:
-            # 创建思考Agent
-            thinking_agent = ThinkingAgent(provider=self.thinking_provider, model_name=self.thinking_model)
-
-            # 获取执行Agent
-            execution_agent = await self.get_agent_for_session(
+            # 使用agent_manager的get_coordinator方法，它会自动加载MCP工具
+            from copilot.core.agent_manager import agent_manager
+            
+            coordinator = await agent_manager.get_coordinator(
                 session_id=session_id,
-                provider=provider,
-                model_name=model_name,
-                tools=tools,
-                context_memory_enabled=context_memory_enabled,
-                max_history_messages=max_history_messages,
-                max_context_tokens=max_context_tokens,
-                **llm_kwargs,
-            )
-
-            # 创建协调器
-            coordinator = AgentCoordinator(
-                thinking_agent=thinking_agent,
-                execution_agent=execution_agent,
+                thinking_provider=self.thinking_provider,
+                thinking_model=self.thinking_model,
+                execution_provider=provider or self.default_provider,
+                execution_model=model_name or self.default_model_name,
                 enable_thinking_mode=self.thinking_mode_enabled,
                 save_thinking_process=self.save_thinking_process,
+                **llm_kwargs,
             )
 
             # 缓存协调器
             self._coordinators[session_id] = coordinator
 
-            logger.debug(f"Created AgentCoordinator for session {session_id}")
+            logger.debug(f"Created AgentCoordinator for session {session_id} with MCP tools")
             return coordinator
 
         except Exception as e:

@@ -4,12 +4,11 @@ Agent协调器 - 管理思考Agent和执行Agent的协作
 """
 
 import json
-from dataclasses import asdict
 from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from copilot.core.execution_agent import ExecutionAgent
-from copilot.core.thinking_agent import ThinkingAgent, ThinkingResult
+from copilot.core.thinking_agent import ThinkingAgent, ThinkingResult, ThinkingStep
 from copilot.utils.logger import logger
 
 
@@ -37,6 +36,56 @@ class AgentCoordinator:
         self.thinking_history: Dict[str, List[ThinkingResult]] = {}
 
         logger.info(f"AgentCoordinator initialized with thinking_mode={enable_thinking_mode}")
+
+    @classmethod
+    async def create_with_mcp_tools(
+        cls,
+        thinking_provider: str = "deepseek",
+        thinking_model: str = "deepseek-chat",
+        execution_provider: str = "deepseek",
+        execution_model: str = "deepseek-chat",
+        enable_thinking_mode: bool = True,
+        save_thinking_process: bool = True,
+        **llm_kwargs,
+    ):
+        """
+        异步创建AgentCoordinator实例，自动加载MCP工具
+
+        Args:
+            thinking_provider: 思考Agent的LLM提供商
+            thinking_model: 思考Agent的模型名称
+            execution_provider: 执行Agent的LLM提供商
+            execution_model: 执行Agent的模型名称
+            enable_thinking_mode: 是否启用思考模式
+            save_thinking_process: 是否保存思考过程
+            **llm_kwargs: 传递给LLM的额外参数
+
+        Returns:
+            AgentCoordinator: 配置好的协调器实例
+        """
+        # 创建带有MCP工具的思考Agent
+        thinking_agent = await ThinkingAgent.create_with_mcp_tools(
+            provider=thinking_provider,
+            model_name=thinking_model,
+            **llm_kwargs,
+        )
+
+        # 创建带有MCP工具的执行Agent
+        execution_agent = await ExecutionAgent.create_with_mcp_tools(
+            provider=execution_provider,
+            model_name=execution_model,
+            **llm_kwargs,
+        )
+
+        logger.info(f"Creating AgentCoordinator with thinking_mode={enable_thinking_mode}")
+
+        # 创建协调器实例
+        return cls(
+            thinking_agent=thinking_agent,
+            execution_agent=execution_agent,
+            enable_thinking_mode=enable_thinking_mode,
+            save_thinking_process=save_thinking_process,
+        )
 
     async def process_user_input(
         self,
@@ -87,33 +136,92 @@ class AgentCoordinator:
             # 2. 获取对话历史用于思考
             conversation_history = await self._get_conversation_history(session_id)
 
-            # 3. 思考Agent分析
-            thinking_result = await self.thinking_agent.think(user_input=user_input, context=context, conversation_history=conversation_history)
+            thinking_result = None
+
+            # 3. 流式思考Agent分析
+            async for thinking_chunk in self.thinking_agent.think_stream(
+                user_input=user_input, context=context, conversation_history=conversation_history
+            ):
+                # 直接转发思考流数据
+                yield thinking_chunk
+
+                # 如果是思考完成，保存结果用于后续执行
+                if thinking_chunk.get("type") == "thinking_complete" and "thinking_data" in thinking_chunk:
+                    # 从thinking_data重构ThinkingResult对象
+                    thinking_data = thinking_chunk["thinking_data"]
+
+                    # 重构ThinkingStep对象
+                    execution_plan = []
+                    for step_data in thinking_data.get("execution_plan", []):
+                        step = ThinkingStep(
+                            step_id=step_data.get("step_id", f"step_{len(execution_plan)+1}"),
+                            description=step_data.get("description", ""),
+                            reasoning=step_data.get("reasoning", ""),
+                            expected_tools=step_data.get("expected_tools", []),
+                            parameters=step_data.get("parameters", {}),
+                            priority=step_data.get("priority", 1),
+                            dependencies=step_data.get("dependencies", []),
+                        )
+                        execution_plan.append(step)
+
+                    # 重构ThinkingResult对象
+                    thinking_result = ThinkingResult(
+                        user_intent=thinking_data.get("user_intent", ""),
+                        problem_analysis=thinking_data.get("problem_analysis", ""),
+                        execution_plan=execution_plan,
+                        estimated_complexity=thinking_data.get("estimated_complexity", "medium"),
+                        suggested_model=thinking_data.get("suggested_model"),
+                        context_requirements=thinking_data.get("context_requirements", {}),
+                        timestamp=datetime.now(),
+                    )
 
             # 4. 保存思考过程
-            if self.save_thinking_process:
+            if thinking_result and self.save_thinking_process:
                 self._save_thinking_result(session_id, thinking_result)
 
-            # 5. 输出思考结果
-            yield {
-                "type": "thinking_result",
-                "content": self._format_thinking_result(thinking_result),
-                "thinking_data": asdict(thinking_result),
-                "phase": "thinking",
-                "timestamp": datetime.now().isoformat(),
-            }
+            # 5. 检查是否成功获得思考结果
+            if not thinking_result:
+                # 如果没有获得思考结果，创建备用结果
+                logger.warning("未能获得有效的思考结果，使用备用方案")
+                thinking_result = self.thinking_agent._create_fallback_result(user_input)
+
+                if self.save_thinking_process:
+                    self._save_thinking_result(session_id, thinking_result)
 
             # 6. 开始执行阶段
             yield {
                 "type": "execution_start",
                 "content": "⚡ 开始执行任务...",
                 "phase": "execution",
-                "execution_plan": [asdict(step) for step in thinking_result.execution_plan],
+                "execution_plan": [
+                    {
+                        "step_id": step.step_id,
+                        "description": step.description,
+                        "reasoning": step.reasoning,
+                        "expected_tools": step.expected_tools or [],
+                        "parameters": step.parameters or {},
+                        "priority": step.priority,
+                        "dependencies": step.dependencies or [],
+                    }
+                    for step in thinking_result.execution_plan
+                ],
                 "timestamp": datetime.now().isoformat(),
             }
 
-            # 7. 构建增强的执行输入
+            # 7. 构建增强的执行输入，包含工具建议
             enhanced_input = self._build_enhanced_input(user_input, thinking_result)
+            
+            # 获取思考结果中建议的工具
+            suggested_tools = []
+            if hasattr(thinking_result, 'execution_plan') and thinking_result.execution_plan:
+                for step in thinking_result.execution_plan:
+                    if step.expected_tools:
+                        suggested_tools.extend(step.expected_tools)
+            
+            # 如果有建议的工具，在输入中明确提及
+            if suggested_tools:
+                enhanced_input += f"\n\n💡 **建议使用的工具**: {', '.join(suggested_tools)}"
+                enhanced_input += "\n请优先考虑使用这些工具来完成分析任务。"
 
             # 8. 执行Agent处理
             async for chunk in self.execution_agent.chat(
@@ -304,6 +412,7 @@ class AgentCoordinator:
                 "timestamp": datetime.now().isoformat(),
             }
 
+            # 使用原有的refine_plan方法（保持兼容性）
             refined_result = await self.thinking_agent.refine_plan(last_thinking, feedback)
 
             # 保存优化后的计划
@@ -314,7 +423,26 @@ class AgentCoordinator:
             yield {
                 "type": "refined_plan",
                 "content": f"📋 优化后的执行计划:\n{self._format_thinking_result(refined_result)}",
-                "thinking_data": asdict(refined_result),
+                "thinking_data": {
+                    "user_intent": refined_result.user_intent,
+                    "problem_analysis": refined_result.problem_analysis,
+                    "execution_plan": [
+                        {
+                            "step_id": step.step_id,
+                            "description": step.description,
+                            "reasoning": step.reasoning,
+                            "expected_tools": step.expected_tools or [],
+                            "parameters": step.parameters or {},
+                            "priority": step.priority,
+                            "dependencies": step.dependencies or [],
+                        }
+                        for step in refined_result.execution_plan
+                    ],
+                    "estimated_complexity": refined_result.estimated_complexity,
+                    "suggested_model": refined_result.suggested_model,
+                    "context_requirements": refined_result.context_requirements or {},
+                    "timestamp": refined_result.timestamp.isoformat() if refined_result.timestamp else datetime.now().isoformat(),
+                },
                 "phase": "refining",
                 "timestamp": datetime.now().isoformat(),
             }
