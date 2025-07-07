@@ -42,7 +42,15 @@ class AgentManager:
         logger.info("AgentManager stopped")
 
     async def get_agent(
-        self, session_id: str, provider: Optional[str] = None, model_name: Optional[str] = None, tools: List = None, **llm_kwargs
+        self,
+        session_id: str,
+        provider: Optional[str] = None,
+        model_name: Optional[str] = None,
+        tools: List = None,
+        context_memory_enabled: bool = True,
+        max_history_messages: int = 10,
+        max_context_tokens: int = None,
+        **llm_kwargs,
     ) -> CoreAgent:
         """
         获取指定会话的Agent实例
@@ -52,6 +60,9 @@ class AgentManager:
             provider: LLM提供商
             model_name: 模型名称
             tools: 传统工具列表
+            context_memory_enabled: 是否启用上下文记忆
+            max_history_messages: 最大历史消息数量
+            max_context_tokens: 最大上下文token数量
             **llm_kwargs: LLM参数
 
         Returns:
@@ -65,7 +76,9 @@ class AgentManager:
             agent_info["last_used"] = current_time
 
             # 检查Agent配置是否需要更新
-            if self._should_update_agent(agent_info["agent"], provider, model_name, **llm_kwargs):
+            if self._should_update_agent(
+                agent_info["agent"], provider, model_name, context_memory_enabled, max_history_messages, max_context_tokens, **llm_kwargs
+            ):
                 logger.info(f"Agent configuration changed for session {session_id}, recreating...")
                 await self._remove_agent(session_id)
             else:
@@ -78,7 +91,15 @@ class AgentManager:
 
         # 创建新的Agent实例
         logger.info(f"Creating new agent for session: {session_id}")
-        agent = await CoreAgent.create_with_mcp_tools(provider=provider, model_name=model_name, tools=tools, **llm_kwargs)
+        agent = await CoreAgent.create_with_mcp_tools(
+            provider=provider,
+            model_name=model_name,
+            tools=tools,
+            context_memory_enabled=context_memory_enabled,
+            max_history_messages=max_history_messages,
+            max_context_tokens=max_context_tokens,
+            **llm_kwargs,
+        )
 
         # 存储Agent实例
         self.agents[session_id] = {
@@ -87,10 +108,16 @@ class AgentManager:
             "last_used": current_time,
             "provider": provider,
             "model_name": model_name,
+            "context_memory_enabled": context_memory_enabled,
+            "max_history_messages": max_history_messages,
+            "max_context_tokens": max_context_tokens,
             "llm_kwargs": llm_kwargs,
         }
 
-        logger.info(f"Created agent for session {session_id} with provider: {provider}, model: {model_name}")
+        logger.info(
+            f"Created agent for session {session_id} with provider: {provider}, model: {model_name}, "
+            f"context_memory: {context_memory_enabled}, max_history: {max_history_messages}, max_tokens: {max_context_tokens}"
+        )
         return agent
 
     async def remove_agent(self, session_id: str) -> bool:
@@ -116,11 +143,26 @@ class AgentManager:
             return True
         return False
 
-    def _should_update_agent(self, agent: CoreAgent, provider: Optional[str], model_name: Optional[str], **llm_kwargs) -> bool:
+    def _should_update_agent(
+        self,
+        agent: CoreAgent,
+        provider: Optional[str],
+        model_name: Optional[str],
+        context_memory_enabled: bool,
+        max_history_messages: int,
+        max_context_tokens: int,
+        **llm_kwargs,
+    ) -> bool:
         """检查是否需要更新Agent配置"""
         if provider and agent.provider != provider:
             return True
         if model_name and agent.model_name != model_name:
+            return True
+        if agent.context_memory_enabled != context_memory_enabled:
+            return True
+        if agent.max_history_messages != max_history_messages:
+            return True
+        if max_context_tokens is not None and agent.max_context_tokens != max_context_tokens:
             return True
         # 这里可以添加更多的配置比较逻辑
         return False

@@ -519,3 +519,141 @@ async def handle_permission_response(request: PermissionResponseRequest, current
         raise
     except Exception as e:
         raise ErrorHandler.handle_system_error(e, "处理工具权限响应")
+
+
+@router.get("/sessions/{session_id}/context-memory")
+async def get_session_context_memory_info(
+    session_id: str,
+    current_user: dict = Depends(get_current_user_from_state),
+):
+    """获取会话的上下文记忆信息"""
+    try:
+        # 验证session属于当前用户
+        user_id = current_user.get("user_id")
+        if not user_id:
+            raise_validation_error("用户ID缺失")
+
+        # 验证会话所有权
+        session = await session_manager.get_session(session_id)
+        if session is None:
+            raise_chat_error(ErrorCodes.CHAT_SESSION_NOT_FOUND, "会话不存在")
+
+        if session.user_id != user_id:
+            raise_chat_error(ErrorCodes.CHAT_PERMISSION_DENIED, "无权访问此会话")
+
+        # 获取记忆信息
+        service = await get_chat_service()
+        memory_info = await service.get_session_context_memory_info(session_id)
+
+        return memory_info
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise ErrorHandler.handle_system_error(e, "获取会话记忆信息")
+
+
+@router.get("/context-memory/config")
+async def get_context_memory_config(
+    current_user: dict = Depends(get_current_user_from_state),
+):
+    """获取全局上下文记忆配置"""
+    try:
+        service = await get_chat_service()
+        config = service.get_context_memory_config()
+        
+        return {
+            "message": "上下文记忆配置信息",
+            "config": config
+        }
+
+    except Exception as e:
+        raise ErrorHandler.handle_system_error(e, "获取记忆配置")
+
+
+@router.post("/context-memory/configure")
+async def configure_context_memory(
+    config: dict,  # {"enabled": bool, "max_history_messages": int}
+    current_user: dict = Depends(get_current_user_from_state),
+):
+    """配置全局上下文记忆设置（需要管理员权限）"""
+    try:
+        # 这里可以添加管理员权限检查
+        # if not current_user.get("is_admin"):
+        #     raise_validation_error("需要管理员权限")
+
+        enabled = config.get("enabled", True)
+        max_history_messages = config.get("max_history_messages", 10)
+
+        # 验证参数
+        if not isinstance(enabled, bool):
+            raise_validation_error("enabled参数必须是布尔值")
+        
+        if not isinstance(max_history_messages, int) or max_history_messages < 0:
+            raise_validation_error("max_history_messages必须是非负整数")
+
+        if max_history_messages > 50:
+            raise_validation_error("max_history_messages不能超过50")
+
+        # 配置记忆设置
+        service = await get_chat_service()
+        service.configure_context_memory(enabled, max_history_messages)
+
+        return {
+            "message": "上下文记忆配置已更新",
+            "config": {
+                "enabled": enabled,
+                "max_history_messages": max_history_messages
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise ErrorHandler.handle_system_error(e, "配置记忆设置")
+
+
+@router.get("/sessions/{session_id}/agent-info")
+async def get_session_agent_info(
+    session_id: str,
+    current_user: dict = Depends(get_current_user_from_state),
+):
+    """获取会话的Agent详细信息，包括记忆配置"""
+    try:
+        # 验证session属于当前用户
+        user_id = current_user.get("user_id")
+        if not user_id:
+            raise_validation_error("用户ID缺失")
+
+        # 验证会话所有权
+        session = await session_manager.get_session(session_id)
+        if session is None:
+            raise_chat_error(ErrorCodes.CHAT_SESSION_NOT_FOUND, "会话不存在")
+
+        if session.user_id != user_id:
+            raise_chat_error(ErrorCodes.CHAT_PERMISSION_DENIED, "无权访问此会话")
+
+        # 获取Agent信息
+        service = await get_chat_service()
+        agent = await service.get_agent_for_session(session_id)
+        
+        # 获取记忆信息
+        memory_info = await service.get_session_context_memory_info(session_id)
+        
+        # 获取提供商信息
+        provider_info = await service.get_provider_info(session_id)
+
+        return {
+            "session_id": session_id,
+            "agent_info": {
+                "provider": agent.provider,
+                "model": agent.model_name,
+                "context_memory": memory_info,
+                "provider_info": provider_info
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise ErrorHandler.handle_system_error(e, "获取Agent信息")

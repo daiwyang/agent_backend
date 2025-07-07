@@ -46,8 +46,22 @@ class ChatService:
         self.default_tools = None
         self.default_llm_kwargs = {}
 
+        # 上下文记忆配置
+        self.default_context_memory_enabled = True
+        self.default_max_history_messages = 10
+        self.default_max_context_tokens = None
+
     @classmethod
-    async def create(cls, provider: str = None, model_name: str = None, tools: List = None, **llm_kwargs):
+    async def create(
+        cls,
+        provider: str = None,
+        model_name: str = None,
+        tools: List = None,
+        context_memory_enabled: bool = True,
+        max_history_messages: int = 10,
+        max_context_tokens: int = None,
+        **llm_kwargs,
+    ):
         """
         异步创建ChatService实例
 
@@ -55,6 +69,9 @@ class ChatService:
             provider: 默认LLM提供商 (deepseek, openai, claude, moonshot, zhipu, qwen, gemini)
             model_name: 默认模型名称
             tools: 默认工具列表
+            context_memory_enabled: 是否启用上下文记忆
+            max_history_messages: 最大历史消息数量
+            max_context_tokens: 最大上下文token数量
             **llm_kwargs: 传递给LLM的额外参数
         """
         service = cls()
@@ -62,8 +79,16 @@ class ChatService:
         service.default_model_name = model_name
         service.default_tools = tools or []
         service.default_llm_kwargs = llm_kwargs
-        
-        logger.info(f"ChatService created with default provider: {provider}, model: {model_name}")
+
+        # 配置上下文记忆
+        service.default_context_memory_enabled = context_memory_enabled
+        service.default_max_history_messages = max_history_messages
+        service.default_max_context_tokens = max_context_tokens
+
+        logger.info(
+            f"ChatService created with default provider: {provider}, model: {model_name}, "
+            f"context_memory: {context_memory_enabled}, max_history: {max_history_messages}, max_tokens: {max_context_tokens}"
+        )
         return service
 
     @property
@@ -80,39 +105,63 @@ class ChatService:
         return await session_manager.create_session(user_id, window_id)
 
     async def get_agent_for_session(
-        self, 
-        session_id: str, 
-        provider: str = None, 
+        self,
+        session_id: str,
+        provider: str = None,
         model_name: str = None,
         tools: List = None,
-        **llm_kwargs
+        context_memory_enabled: bool = None,
+        max_history_messages: int = None,
+        max_context_tokens: int = None,
+        **llm_kwargs,
     ) -> CoreAgent:
         """
-        为指定会话获取Agent实例
-        
+        获取会话专用的Agent实例 - 从AgentManager获取
+
         Args:
             session_id: 会话ID
-            provider: LLM提供商（可选，默认使用服务默认配置）
-            model_name: 模型名称（可选）
-            tools: 工具列表（可选）
-            **llm_kwargs: LLM参数（可选）
-            
+            provider: LLM提供商，如果不提供则使用默认值
+            model_name: 模型名称，如果不提供则使用默认值
+            tools: 工具列表，如果不提供则使用默认值
+            context_memory_enabled: 是否启用上下文记忆，如果不提供则使用默认值
+            max_history_messages: 最大历史消息数量，如果不提供则使用默认值
+            max_context_tokens: 最大上下文token数量，如果不提供则使用默认值
+            **llm_kwargs: LLM参数
+
         Returns:
-            CoreAgent: 该会话的专用Agent实例
+            CoreAgent: 会话专用的Agent实例
         """
-        # 使用传入的参数或默认配置
-        effective_provider = provider or self.default_provider
-        effective_model_name = model_name or self.default_model_name
-        effective_tools = tools if tools is not None else self.default_tools
-        effective_kwargs = {**self.default_llm_kwargs, **llm_kwargs}
-        
-        return await agent_manager.get_agent(
+        from copilot.core.agent_manager import agent_manager
+
+        # 使用提供的参数或默认值
+        final_provider = provider or self.default_provider
+        final_model_name = model_name or self.default_model_name
+        final_tools = tools or self.default_tools
+        final_context_memory_enabled = context_memory_enabled if context_memory_enabled is not None else self.default_context_memory_enabled
+        final_max_history_messages = max_history_messages if max_history_messages is not None else self.default_max_history_messages
+        final_max_context_tokens = max_context_tokens if max_context_tokens is not None else self.default_max_context_tokens
+
+        # 合并LLM参数
+        final_llm_kwargs = {**self.default_llm_kwargs, **llm_kwargs}
+
+        # 从AgentManager获取会话专用的Agent实例
+        agent = await agent_manager.get_agent(
             session_id=session_id,
-            provider=effective_provider,
-            model_name=effective_model_name,
-            tools=effective_tools,
-            **effective_kwargs
+            provider=final_provider,
+            model_name=final_model_name,
+            tools=final_tools,
+            context_memory_enabled=final_context_memory_enabled,
+            max_history_messages=final_max_history_messages,
+            max_context_tokens=final_max_context_tokens,
+            **final_llm_kwargs,
         )
+
+        logger.debug(
+            f"Retrieved agent for session {session_id}: {final_provider}/{final_model_name}, "
+            f"context_memory: {final_context_memory_enabled}, max_history: {final_max_history_messages}, max_tokens: {final_max_context_tokens}"
+        )
+
+        return agent
 
     async def get_provider_info(self, session_id: str = None) -> Dict[str, Any]:
         """
@@ -130,14 +179,11 @@ class ChatService:
                 return agent.get_provider_info()
             except Exception as e:
                 logger.warning(f"Failed to get agent info for session {session_id}: {e}")
-        
+
         # 返回默认配置信息
         from copilot.core.llm_factory import LLMFactory
-        return {
-            "provider": self.default_provider,
-            "model": self.default_model_name,
-            "available_providers": LLMFactory.get_available_providers()
-        }
+
+        return {"provider": self.default_provider, "model": self.default_model_name, "available_providers": LLMFactory.get_available_providers()}
 
     async def switch_provider(self, session_id: str, provider: str, model_name: str = None, **llm_kwargs) -> bool:
         """
@@ -155,18 +201,13 @@ class ChatService:
         try:
             # 移除旧的Agent实例，下次调用时会用新配置创建
             await agent_manager.remove_agent(session_id)
-            
+
             # 获取新的Agent实例（会使用新配置创建）
-            agent = await self.get_agent_for_session(
-                session_id=session_id,
-                provider=provider,
-                model_name=model_name,
-                **llm_kwargs
-            )
-            
+            agent = await self.get_agent_for_session(session_id=session_id, provider=provider, model_name=model_name, **llm_kwargs)
+
             logger.info(f"Successfully switched provider for session {session_id} to {provider}/{model_name}")
             return True
-            
+
         except Exception as e:
             logger.error(f"Failed to switch provider for session {session_id}: {e}")
             return False
@@ -227,7 +268,7 @@ class ChatService:
 
             # 获取该会话专用的Agent实例
             agent = await self.get_agent_for_session(session_info.session_id)
-            
+
             logger.debug(f"Using agent for session {session_info.session_id}: {agent.provider}/{agent.model_name}")
 
             # 使用会话专用Agent进行流式聊天
@@ -243,13 +284,10 @@ class ChatService:
                     if isinstance(chunk, dict):
                         chunk_content = chunk.get("content", "")
                         chunk_type = chunk.get("type", "content")
-                        
+
                         if chunk_content:
                             # 传递完整的chunk信息，包括类型
-                            yield {
-                                "content": chunk_content,
-                                "type": chunk_type
-                            }
+                            yield {"content": chunk_content, "type": chunk_type}
                             full_response += chunk_content
                     else:
                         # 兼容旧格式（字符串）
@@ -564,18 +602,18 @@ class ChatService:
     async def reload_agent(self, session_id: str = None) -> bool:
         """
         重新加载 agent（重新创建以获取最新的 MCP 工具）
-        
+
         当 MCP server 连接/断开时，由 mcp_router 调用此方法来刷新 agent
-        
+
         Args:
             session_id: 指定会话ID，如果为None则重新加载所有Agent实例
-        
+
         Returns:
             bool: 是否成功重新创建 agent
         """
         try:
             logger.info(f"Reloading agents to refresh MCP tools for session: {session_id or 'all'}")
-            
+
             if session_id:
                 # 重新加载指定会话的Agent
                 success = await agent_manager.remove_agent(session_id)
@@ -588,17 +626,71 @@ class ChatService:
             else:
                 # 重新加载所有Agent实例
                 stats_before = agent_manager.get_agent_stats()
-                
+
                 # 清除所有Agent实例，它们会在下次请求时重新创建
                 # 这里我们通过重启Agent管理器来实现
                 await agent_manager.stop()
                 await agent_manager.start()
-                
+
                 stats_after = agent_manager.get_agent_stats()
-                
+
                 logger.info(f"Successfully reloaded all agents: {stats_before['total_agents']} -> {stats_after['total_agents']}")
                 return True
-            
+
         except Exception as e:
             logger.error(f"Failed to reload agent for session {session_id}: {str(e)}")
             return False
+
+    def configure_context_memory(self, enabled: bool = True, max_history_messages: int = 10, max_context_tokens: int = None):
+        """
+        配置全局上下文记忆设置
+
+        Args:
+            enabled: 是否启用上下文记忆
+            max_history_messages: 最大历史消息数量
+            max_context_tokens: 最大上下文token数量
+        """
+        self.default_context_memory_enabled = enabled
+        self.default_max_history_messages = max_history_messages
+
+        if max_context_tokens is not None:
+            self.default_max_context_tokens = max_context_tokens
+
+        logger.info(f"Global context memory configured: enabled={enabled}, max_history={max_history_messages}, max_tokens={max_context_tokens}")
+
+    def get_context_memory_config(self) -> Dict[str, Any]:
+        """
+        获取上下文记忆配置信息
+
+        Returns:
+            Dict[str, Any]: 记忆配置信息
+        """
+        return {
+            "context_memory_enabled": self.default_context_memory_enabled,
+            "max_history_messages": self.default_max_history_messages,
+            "max_context_tokens": self.default_max_context_tokens,
+        }
+
+    async def get_session_context_memory_info(self, session_id: str) -> Dict[str, Any]:
+        """
+        获取指定会话的上下文记忆信息
+
+        Args:
+            session_id: 会话ID
+
+        Returns:
+            Dict[str, Any]: 包含记忆配置和历史消息统计的信息
+        """
+        try:
+            # 获取Agent实例的记忆配置
+            agent = await self.get_agent_for_session(session_id)
+            agent_memory_info = agent.get_context_memory_info()
+
+            # 获取实际的历史消息数量
+            history_messages = await self.chat_history_manager.get_session_messages(session_id, limit=100)
+
+            return {**agent_memory_info, "actual_history_count": len(history_messages), "session_id": session_id}
+
+        except Exception as e:
+            logger.error(f"Error getting context memory info for session {session_id}: {str(e)}")
+            return {"context_memory_enabled": False, "max_history_messages": 0, "actual_history_count": 0, "error": str(e)}
