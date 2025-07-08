@@ -4,12 +4,20 @@
 """
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from copilot.core.llm_factory import LLMFactory
 from copilot.utils.logger import logger
+
+# 常量定义
+DEFAULT_TEMPERATURE = 0.7
+DEFAULT_MAX_TOKENS = 4000
+MAX_EXECUTION_STEPS = 5
+MAX_CONVERSATION_HISTORY = 5
+MAX_USER_INPUT_LENGTH = 200
+MAX_PROBLEM_ANALYSIS_LENGTH = 800
 
 
 @dataclass
@@ -19,10 +27,10 @@ class ThinkingStep:
     step_id: str
     description: str
     reasoning: str
-    expected_tools: List[str] = None
-    parameters: Dict[str, Any] = None
+    expected_tools: List[str] = field(default_factory=list)
+    parameters: Dict[str, Any] = field(default_factory=dict)
     priority: int = 1
-    dependencies: List[str] = None
+    dependencies: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -33,9 +41,9 @@ class ThinkingResult:
     problem_analysis: str
     execution_plan: List[ThinkingStep]
     estimated_complexity: str  # low, medium, high
-    suggested_model: str = None
-    context_requirements: Dict[str, Any] = None
-    timestamp: datetime = None
+    suggested_model: Optional[str] = None
+    context_requirements: Dict[str, Any] = field(default_factory=dict)
+    timestamp: Optional[datetime] = None
 
 
 class ThinkingAgent:
@@ -56,8 +64,16 @@ class ThinkingAgent:
         self.mcp_tools = mcp_tools or []
         self.llm_kwargs = llm_kwargs
 
+        # 性能统计
+        self.stats = {
+            "total_requests": 0,
+            "successful_requests": 0,
+            "failed_requests": 0,
+            "average_response_time": 0.0,
+        }
+
         # 初始化LLM（使用更高的temperature以获得更多创造性思考）
-        llm_config = {"temperature": 0.7, "max_tokens": 4000, **llm_kwargs}  # 稍微提高创造性  # 确保有足够空间进行详细思考
+        llm_config = {"temperature": DEFAULT_TEMPERATURE, "max_tokens": DEFAULT_MAX_TOKENS, **llm_kwargs}
 
         self.llm = LLMFactory.create_llm(provider=provider, model=model_name, **llm_config)
 
@@ -126,7 +142,9 @@ class ThinkingAgent:
 
         return prompt
 
-    async def think(self, user_input: str, context: Dict[str, Any] = None, conversation_history: List[Dict] = None) -> ThinkingResult:
+    async def think(
+        self, user_input: str, context: Optional[Dict[str, Any]] = None, conversation_history: Optional[List[Dict]] = None
+    ) -> ThinkingResult:
         """
         分析用户输入并生成思考结果
 
@@ -138,6 +156,17 @@ class ThinkingAgent:
         Returns:
             ThinkingResult: 详细的思考和规划结果
         """
+        # 输入验证
+        if not user_input or not user_input.strip():
+            logger.warning("用户输入为空，返回默认思考结果")
+            return self._create_fallback_result("用户输入为空")
+
+        # 性能监控
+        import time
+
+        start_time = time.time()
+        self.stats["total_requests"] += 1
+
         try:
             # 构建完整的思考输入
             thinking_input = self._build_thinking_input(user_input, context, conversation_history)
@@ -150,16 +179,26 @@ class ThinkingAgent:
             # 解析思考结果
             result = self._parse_thinking_response(response.content)
 
-            logger.info(f"ThinkingAgent完成分析，生成了{len(result.execution_plan)}个执行步骤")
+            # 更新性能统计
+            end_time = time.time()
+            response_time = end_time - start_time
+            self.stats["successful_requests"] += 1
+            self.stats["average_response_time"] = (
+                self.stats["average_response_time"] * (self.stats["successful_requests"] - 1) + response_time
+            ) / self.stats["successful_requests"]
+
+            logger.info(f"ThinkingAgent完成分析，生成了{len(result.execution_plan)}个执行步骤，耗时{response_time:.2f}秒")
 
             return result
 
         except Exception as e:
+            # 更新失败统计
+            self.stats["failed_requests"] += 1
             logger.error(f"ThinkingAgent思考过程出错: {str(e)}")
             # 返回基础的思考结果
             return self._create_fallback_result(user_input)
 
-    async def think_stream(self, user_input: str, context: Dict[str, Any] = None, conversation_history: List[Dict] = None):
+    async def think_stream(self, user_input: str, context: Optional[Dict[str, Any]] = None, conversation_history: Optional[List[Dict]] = None):
         """
         流式思考方法 - 真正的流式输出，参考 execution agent 的实现
 
@@ -171,6 +210,17 @@ class ThinkingAgent:
         Yields:
             Dict[str, Any]: 流式思考数据
         """
+        # 输入验证
+        if not user_input or not user_input.strip():
+            logger.warning("用户输入为空，返回错误信息")
+            yield {
+                "type": "thinking_error",
+                "content": "🚫 用户输入为空，无法进行分析",
+                "phase": "thinking",
+                "timestamp": datetime.now().isoformat(),
+            }
+            return
+
         try:
             # 构建完整的思考输入
             thinking_input = self._build_thinking_input(user_input, context, conversation_history)
@@ -364,7 +414,7 @@ class ThinkingAgent:
         else:
             return "🟡 **复杂度**: medium"
 
-    def _extract_suggested_tools(self, content: str, execution_plan: List[ThinkingStep] = None) -> List[str]:
+    def _extract_suggested_tools(self, content: str, execution_plan: Optional[List[ThinkingStep]] = None) -> List[str]:
         """从思考内容中提取建议的工具，基于执行计划和实际可用的MCP工具"""
         suggested_tools = []
         content_lower = content.lower()
@@ -483,9 +533,9 @@ class ThinkingAgent:
             ]
 
         # 限制步骤数量，避免过于复杂的计划
-        if len(plans) > 5:
-            plans = plans[:5]
-            logger.info(f"执行计划步骤过多({len(plans)}个)，限制为前5个步骤")
+        if len(plans) > MAX_EXECUTION_STEPS:
+            plans = plans[:MAX_EXECUTION_STEPS]
+            logger.info(f"执行计划步骤过多({len(plans)}个)，限制为前{MAX_EXECUTION_STEPS}个步骤")
 
         return plans
 
@@ -786,9 +836,9 @@ class ThinkingAgent:
         if context:
             input_parts.append(f"\n当前上下文：\n{json.dumps(context, ensure_ascii=False, indent=2)}")
 
-        # 添加对话历史（最近5轮）
+        # 添加对话历史（最近几轮）
         if conversation_history:
-            recent_history = conversation_history[-5:]  # 只取最近5轮
+            recent_history = conversation_history[-MAX_CONVERSATION_HISTORY:]  # 只取最近几轮
             history_text = "\n".join(
                 [
                     f"{msg['role']}: {msg['content'][:200]}..." if len(msg["content"]) > 200 else f"{msg['role']}: {msg['content']}"
@@ -943,10 +993,17 @@ class ThinkingAgent:
 
                 # 如果不是新步骤，添加到当前步骤的描述中
                 elif current_step and line and not step_created:
-                    current_step.description += f" {line}"
+                    # 使用列表收集描述片段，最后一次性拼接
+                    if not hasattr(current_step, "_description_parts"):
+                        current_step._description_parts = [current_step.description]
+                    current_step._description_parts.append(line)
 
             # 添加最后一个步骤
             if current_step:
+                # 如果有收集的描述片段，合并它们
+                if hasattr(current_step, "_description_parts"):
+                    current_step.description = " ".join(current_step._description_parts)
+                    delattr(current_step, "_description_parts")
                 steps.append(current_step)
 
         except Exception as e:
@@ -1131,6 +1188,8 @@ class ThinkingAgent:
             "model": self.model_name,
             "capabilities": ["intent_analysis", "problem_decomposition", "execution_planning", "complexity_assessment", "plan_optimization"],
             "config": self.llm_kwargs,
+            "performance_stats": self.stats.copy(),
+            "mcp_tools_count": len(self.mcp_tools),
         }
 
     def _clean_thinking_chunk(self, chunk: str) -> str:
@@ -1196,5 +1255,4 @@ class ThinkingAgent:
                 "executable_steps": len([plan for plan in execution_plan if plan.get("expected_tools")]),
             },
         }
-
         return json.dumps(structured_data, ensure_ascii=False, indent=2)
