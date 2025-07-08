@@ -223,7 +223,7 @@ class ChatService:
         try:
             # 使用agent_manager的get_coordinator方法，它会自动加载MCP工具
             from copilot.core.agent_manager import agent_manager
-            
+
             coordinator = await agent_manager.get_coordinator(
                 session_id=session_id,
                 thinking_provider=self.thinking_provider,

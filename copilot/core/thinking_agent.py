@@ -161,7 +161,7 @@ class ThinkingAgent:
 
     async def think_stream(self, user_input: str, context: Dict[str, Any] = None, conversation_history: List[Dict] = None):
         """
-        流式思考方法 - 简化版本，直接输出AI的思考过程
+        流式思考方法 - 真正的流式输出，参考 execution agent 的实现
 
         Args:
             user_input: 用户输入
@@ -177,44 +177,21 @@ class ThinkingAgent:
 
             logger.info(f"ThinkingAgent开始流式分析用户输入: {user_input[:100]}...")
 
-            # 使用流式调用，直接输出AI的思考过程
+            # 使用真正的流式调用，参考 execution agent 的实现
             full_response = ""
-            thinking_buffer = ""
 
             async for chunk in self.llm.astream(thinking_input):
                 if hasattr(chunk, "content") and chunk.content:
                     content = str(chunk.content)
                     full_response += content
-                    thinking_buffer += content
 
-                    # 简单的分块输出：当有完整句子或足够长度时输出
-                    if len(thinking_buffer) > 30 and any(char in thinking_buffer for char in "。！？\n"):
-                        yield {
-                            "type": "thinking_chunk",
-                            "content": thinking_buffer.strip(),
-                            "phase": "thinking",
-                            "timestamp": datetime.now().isoformat(),
-                        }
-                        thinking_buffer = ""
-
-                    # 简单的分块输出：当有完整句子或足够长度时输出
-                    if len(thinking_buffer) > 30 and any(char in thinking_buffer for char in "。！？\n"):
-                        # 清理内容，移除markdown标记
-                        clean_content = self._clean_thinking_chunk(thinking_buffer.strip())
-                        if clean_content:
-                            yield {
-                                "type": "thinking_chunk",
-                                "content": clean_content,
-                                "phase": "thinking",
-                                "timestamp": datetime.now().isoformat(),
-                            }
-                        thinking_buffer = ""
-
-            # 输出剩余的思考内容
-            if thinking_buffer.strip():
-                clean_content = self._clean_thinking_chunk(thinking_buffer.strip())
-                if clean_content:
-                    yield {"type": "thinking_chunk", "content": clean_content, "phase": "thinking", "timestamp": datetime.now().isoformat()}
+                    # 真正的流式输出：立即输出每个chunk，不缓冲
+                    yield {
+                        "type": "thinking_chunk",
+                        "content": content,
+                        "phase": "thinking",
+                        "timestamp": datetime.now().isoformat(),
+                    }
 
             # 思考完成，创建JSON格式的结构化数据
             if full_response:
@@ -267,30 +244,33 @@ class ThinkingAgent:
             }
 
             # 创建简单的备用结果 - JSON格式
+            fallback_plan = [
+                {
+                    "step_id": "step_1",
+                    "description": f"处理用户请求: {user_input[:100]}{'...' if len(user_input) > 100 else ''}",
+                    "reasoning": "思考Agent出错，直接处理用户输入",
+                    "expected_tools": [],  # 不预设工具，让执行Agent决定
+                    "parameters": {},
+                    "priority": 1,
+                    "dependencies": [],
+                }
+            ]
+
             fallback_result = {
                 "status": "error",
                 "user_input": user_input,
                 "user_intent": user_input[:200] + "..." if len(user_input) > 200 else user_input,
                 "problem_analysis": "思考过程遇到问题，将直接处理用户请求",
                 "key_points": ["系统将直接处理用户请求"],
-                "execution_plan": [
-                    {
-                        "step_id": "step_1",
-                        "description": f"处理用户请求: {user_input[:100]}{'...' if len(user_input) > 100 else ''}",
-                        "reasoning": "思考Agent出错，直接处理用户输入",
-                        "expected_tools": ["web_search"],  # 默认建议使用网络搜索
-                        "parameters": {},
-                        "priority": 1,
-                        "dependencies": [],
-                    }
-                ],
+                "execution_plan": fallback_plan,
                 "estimated_complexity": "medium",
                 "complexity_level": "medium",
                 "suggested_model": None,
                 "context_requirements": {},
+                "suggested_tools": [],  # 不预设工具
                 "thinking_duration": "error",
                 "timestamp": datetime.now().isoformat(),
-                "metadata": {"response_length": 0, "key_points_count": 1, "analysis_quality": "error"},
+                "metadata": {"response_length": 0, "key_points_count": 1, "analysis_quality": "error", "plan_steps": 1},
             }
 
             yield {
@@ -384,34 +364,355 @@ class ThinkingAgent:
         else:
             return "🟡 **复杂度**: medium"
 
-    def _extract_suggested_tools(self, content: str) -> List[str]:
-        """从思考内容中提取建议的工具，基于实际可用的MCP工具"""
+    def _extract_suggested_tools(self, content: str, execution_plan: List[ThinkingStep] = None) -> List[str]:
+        """从思考内容中提取建议的工具，基于执行计划和实际可用的MCP工具"""
         suggested_tools = []
         content_lower = content.lower()
 
         if not self.mcp_tools:
             return suggested_tools
 
-        # 遍历可用的MCP工具，检查是否在思考内容中被提及
+        # 如果有执行计划，优先从执行计划中提取工具
+        if execution_plan:
+            for step in execution_plan:
+                if step.expected_tools:
+                    suggested_tools.extend(step.expected_tools)
+
+        # 如果执行计划中没有工具信息，则从思考内容中智能提取
+        if not suggested_tools:
+            # 遍历可用的MCP工具，检查是否在思考内容中被提及
+            for tool in self.mcp_tools:
+                tool_name = getattr(tool, "name", str(tool)).lower()
+                tool_desc = getattr(tool, "description", "").lower()
+
+                # 检查工具名称是否在内容中被提及
+                if tool_name in content_lower:
+                    suggested_tools.append(tool_name)
+                    continue
+
+                # 检查工具描述中的关键词是否在内容中被提及
+                # 提取描述中的关键词（通常是功能描述）
+                desc_keywords = self._extract_tool_keywords(tool_desc)
+                for keyword in desc_keywords:
+                    if keyword in content_lower:
+                        suggested_tools.append(tool_name)
+                        break
+
+        # 去重并返回
+        return list(set(suggested_tools))
+
+    def _extract_tools_from_plan(self, execution_plan: List[ThinkingStep]) -> List[str]:
+        """从执行计划中提取需要的工具"""
+        tools = []
+        for step in execution_plan:
+            if step.expected_tools:
+                tools.extend(step.expected_tools)
+        return list(set(tools))
+
+    def _create_execution_plan_from_content(self, content: str) -> List[Dict[str, Any]]:
+        """从思考内容中创建执行计划 - 优化版本，只提取真正需要执行的步骤"""
+        plans = []
+
+        # 清理内容，移除不必要的部分
+        cleaned_content = self._clean_execution_content(content)
+
+        # 尝试从内容中提取多个执行步骤
+        # 按常见的步骤标记分割
+        step_markers = ["1.", "2.", "3.", "4.", "5.", "第一步", "第二步", "第三步", "第四步", "第五步"]
+
+        lines = cleaned_content.split("\n")
+        current_plan = None
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            # 检查是否是新的步骤开始
+            is_new_step = False
+            for marker in step_markers:
+                if line.startswith(marker):
+                    is_new_step = True
+                    break
+
+            if is_new_step:
+                # 保存前一个计划
+                if current_plan:
+                    plans.append(current_plan)
+
+                # 创建新计划
+                step_desc = line
+                for marker in step_markers:
+                    if line.startswith(marker):
+                        step_desc = line[len(marker) :].strip()
+                        break
+
+                # 检查这个步骤是否值得执行（过滤掉描述性、分析性的步骤）
+                if self._is_executable_step(step_desc):
+                    current_plan = {
+                        "step_id": f"step_{len(plans) + 1}",
+                        "description": step_desc,
+                        "reasoning": "基于用户需求制定的执行步骤",
+                        "expected_tools": self._extract_tools_for_step(step_desc),
+                        "parameters": {},
+                        "priority": len(plans) + 1,
+                        "dependencies": [],
+                    }
+                else:
+                    current_plan = None
+            elif current_plan:
+                # 继续添加到当前计划
+                current_plan["description"] += f" {line}"
+
+        # 添加最后一个计划
+        if current_plan:
+            plans.append(current_plan)
+
+        # 如果没有找到明确的步骤，创建一个默认计划
+        if not plans:
+            plans = [
+                {
+                    "step_id": "step_1",
+                    "description": "基于思考结果执行用户请求",
+                    "reasoning": "根据AI的思考分析执行任务",
+                    "expected_tools": [],
+                    "parameters": {},
+                    "priority": 1,
+                    "dependencies": [],
+                }
+            ]
+
+        # 限制步骤数量，避免过于复杂的计划
+        if len(plans) > 5:
+            plans = plans[:5]
+            logger.info(f"执行计划步骤过多({len(plans)}个)，限制为前5个步骤")
+
+        return plans
+
+    def _clean_execution_content(self, content: str) -> str:
+        """清理执行内容，移除分析性、描述性的部分"""
+        if not content:
+            return ""
+
+        # 移除常见的分析性开头
+        analysis_prefixes = [
+            "理解用户需求：",
+            "这是一个",
+            "需要区分",
+            "首先明确",
+            "特别关注：",
+            "所需工具和资源：",
+            "具体行动计划：",
+            "潜在挑战：",
+            "我现在将",
+            "您看这个计划",
+        ]
+
+        lines = content.split("\n")
+        cleaned_lines = []
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            # 跳过分析性的行
+            skip_line = False
+            for prefix in analysis_prefixes:
+                if line.startswith(prefix):
+                    skip_line = True
+                    break
+
+            if not skip_line:
+                cleaned_lines.append(line)
+
+        return "\n".join(cleaned_lines)
+
+    def _is_executable_step(self, step_description: str) -> bool:
+        """判断步骤是否可执行（需要实际工具操作）"""
+        step_lower = step_description.lower()
+
+        # 可执行步骤的关键词
+        executable_keywords = [
+            "搜索",
+            "查找",
+            "查询",
+            "获取",
+            "检索",
+            "分析",
+            "计算",
+            "翻译",
+            "读取",
+            "写入",
+            "保存",
+            "下载",
+            "上传",
+            "处理",
+            "生成",
+            "创建",
+            "search",
+            "find",
+            "query",
+            "get",
+            "retrieve",
+            "analyze",
+            "calculate",
+            "translate",
+            "read",
+            "write",
+            "save",
+            "download",
+            "upload",
+            "process",
+            "generate",
+            "create",
+            "build",
+            "extract",
+            "parse",
+            "validate",
+        ]
+
+        # 非执行步骤的关键词（描述性、分析性）
+        non_executable_keywords = [
+            "理解",
+            "分析",
+            "评估",
+            "考虑",
+            "注意",
+            "关注",
+            "区分",
+            "明确",
+            "understand",
+            "analyze",
+            "evaluate",
+            "consider",
+            "note",
+            "focus",
+            "distinguish",
+            "clarify",
+            "这是",
+            "需要",
+            "应该",
+            "可能",
+            "潜在",
+        ]
+
+        # 检查是否包含可执行关键词
+        has_executable = any(keyword in step_lower for keyword in executable_keywords)
+
+        # 检查是否主要是描述性的
+        is_descriptive = any(keyword in step_lower for keyword in non_executable_keywords)
+
+        # 如果包含可执行关键词且不是纯描述性的，则认为是可执行步骤
+        return has_executable and not is_descriptive
+
+    def _extract_tools_for_step(self, step_description: str) -> List[str]:
+        """为特定步骤提取需要的工具 - 优化版本"""
+        tools = []
+        step_lower = step_description.lower()
+
+        if not self.mcp_tools:
+            return tools
+
+        # 根据步骤描述智能匹配工具
         for tool in self.mcp_tools:
             tool_name = getattr(tool, "name", str(tool)).lower()
             tool_desc = getattr(tool, "description", "").lower()
 
-            # 检查工具名称是否在内容中被提及
-            if tool_name in content_lower:
-                suggested_tools.append(tool_name)
+            # 检查工具名称是否在步骤描述中被提及
+            if tool_name in step_lower:
+                tools.append(tool_name)
                 continue
 
-            # 检查工具描述中的关键词是否在内容中被提及
-            # 提取描述中的关键词（通常是功能描述）
-            desc_keywords = self._extract_tool_keywords(tool_desc)
-            for keyword in desc_keywords:
-                if keyword in content_lower:
-                    suggested_tools.append(tool_name)
+            # 检查工具功能是否与步骤匹配
+            if self._is_tool_suitable_for_step(tool_desc, step_lower):
+                tools.append(tool_name)
+
+        # 如果没有找到匹配的工具，尝试基于步骤类型推荐默认工具
+        if not tools:
+            tools = self._get_default_tools_for_step(step_lower)
+
+        return tools
+
+    def _get_default_tools_for_step(self, step_description: str) -> List[str]:
+        """为步骤获取默认工具推荐"""
+        step_lower = step_description.lower()
+
+        # 基于步骤描述的关键词推荐工具
+        tool_recommendations = {
+            "搜索": ["web_search", "article_search_articles"],
+            "查找": ["web_search", "article_search_articles"],
+            "查询": ["web_search", "article_search_articles"],
+            "检索": ["web_search", "article_search_articles"],
+            "文献": ["pubmed_pubmed_query_page", "biorxiv_advanced_search"],
+            "论文": ["pubmed_pubmed_query_page", "biorxiv_advanced_search"],
+            "学术": ["pubmed_pubmed_query_page", "biorxiv_advanced_search"],
+            "翻译": ["translator"],
+            "计算": ["calculator"],
+            "分析": ["web_search", "article_search_articles"],
+            "获取": ["web_search", "article_search_articles"],
+            "search": ["web_search", "article_search_articles"],
+            "find": ["web_search", "article_search_articles"],
+            "query": ["web_search", "article_search_articles"],
+            "literature": ["pubmed_pubmed_query_page", "biorxiv_advanced_search"],
+            "paper": ["pubmed_pubmed_query_page", "biorxiv_advanced_search"],
+            "academic": ["pubmed_pubmed_query_page", "biorxiv_advanced_search"],
+            "translate": ["translator"],
+            "calculate": ["calculator"],
+            "analyze": ["web_search", "article_search_articles"],
+        }
+
+        # 检查步骤描述中的关键词
+        for keyword, recommended_tools in tool_recommendations.items():
+            if keyword in step_lower:
+                # 检查推荐的工具是否在可用工具中
+                available_tools = []
+                for tool in self.mcp_tools:
+                    tool_name = getattr(tool, "name", str(tool)).lower()
+                    if tool_name in recommended_tools:
+                        available_tools.append(tool_name)
+
+                if available_tools:
+                    return available_tools[:2]  # 最多返回2个工具
+
+        # 如果没有特定匹配，返回通用搜索工具
+        default_tools = []
+        for tool in self.mcp_tools:
+            tool_name = getattr(tool, "name", str(tool)).lower()
+            if any(keyword in tool_name for keyword in ["search", "query", "web"]):
+                default_tools.append(tool_name)
+                if len(default_tools) >= 2:
                     break
 
-        # 去重并返回
-        return list(set(suggested_tools))
+        return default_tools
+
+    def _is_tool_suitable_for_step(self, tool_desc: str, step_desc: str) -> bool:
+        """判断工具是否适合特定步骤"""
+        # 定义工具类型和对应的关键词
+        tool_categories = {
+            "search": ["搜索", "查找", "查询", "获取信息", "了解", "search", "find", "query"],
+            "analysis": ["分析", "评估", "计算", "统计", "analyze", "calculate", "evaluate"],
+            "translation": ["翻译", "转换", "translate", "convert"],
+            "file": ["文件", "读取", "写入", "保存", "file", "read", "write", "save"],
+            "web": ["网络", "网页", "网站", "web", "url", "link"],
+            "code": ["代码", "编程", "开发", "code", "program", "develop"],
+        }
+
+        tool_desc_lower = tool_desc.lower()
+
+        # 确定工具类型
+        tool_type = None
+        for category, keywords in tool_categories.items():
+            if any(keyword in tool_desc_lower for keyword in keywords):
+                tool_type = category
+                break
+
+        if not tool_type:
+            return False
+
+        # 检查步骤是否需要这种类型的工具
+        step_keywords = tool_categories.get(tool_type, [])
+        return any(keyword in step_desc for keyword in step_keywords)
 
     def _extract_tool_keywords(self, tool_desc: str) -> List[str]:
         """从工具描述中提取关键词"""
@@ -587,7 +888,7 @@ class ThinkingAgent:
             return ""
 
     def _parse_execution_plan(self, plan_text: str) -> List[ThinkingStep]:
-        """解析执行计划文本 - 增强版本"""
+        """解析执行计划文本 - 增强版本，支持多条计划"""
         steps = []
         if not plan_text:
             logger.debug("执行计划文本为空")
@@ -634,6 +935,12 @@ class ThinkingAgent:
                     if step_created:
                         current_step = step_created
 
+                # 模式5: 第一步、第二步等
+                elif any(line.startswith(marker) for marker in ["第一步", "第二步", "第三步", "第四步", "第五步"]):
+                    step_created = self._create_step_from_line(f"{len(steps)+1}. {line}", steps, current_step)
+                    if step_created:
+                        current_step = step_created
+
                 # 如果不是新步骤，添加到当前步骤的描述中
                 elif current_step and line and not step_created:
                     current_step.description += f" {line}"
@@ -661,6 +968,11 @@ class ThinkingAgent:
                     parameters={},
                 )
             ]
+
+        # 为每个步骤分配合适的工具
+        for step in steps:
+            if not step.expected_tools:
+                step.expected_tools = self._extract_tools_for_step(step.description)
 
         logger.debug(f"解析完成，共找到 {len(steps)} 个步骤")
         return steps
@@ -847,8 +1159,18 @@ class ThinkingAgent:
         key_points = self._extract_key_points(cleaned_response)
         complexity = self._assess_complexity(cleaned_response)
 
-        # 提取建议的工具
-        suggested_tools = self._extract_suggested_tools(cleaned_response)
+        # 创建执行计划（支持多条，但只包含可执行的步骤）
+        execution_plan = self._create_execution_plan_from_content(cleaned_response)
+
+        # 从执行计划中提取需要的工具
+        suggested_tools = self._extract_tools_from_plan([ThinkingStep(**plan) for plan in execution_plan])
+
+        # 如果执行计划中没有工具信息，则从思考内容中智能提取
+        if not suggested_tools:
+            suggested_tools = self._extract_suggested_tools(cleaned_response)
+
+        # 记录日志
+        logger.info(f"生成执行计划: {len(execution_plan)}个步骤，建议工具: {suggested_tools}")
 
         # 构建结构化数据
         structured_data = {
@@ -857,22 +1179,12 @@ class ThinkingAgent:
             "user_intent": user_input[:200] + "..." if len(user_input) > 200 else user_input,
             "problem_analysis": cleaned_response[:800] + "..." if len(cleaned_response) > 800 else cleaned_response,
             "key_points": key_points,
-            "execution_plan": [
-                {
-                    "step_id": "step_1",
-                    "description": "基于思考结果执行用户请求",
-                    "reasoning": "根据AI的思考分析执行任务",
-                    "expected_tools": suggested_tools,  # 使用提取的工具信息
-                    "parameters": {},
-                    "priority": 1,
-                    "dependencies": [],
-                }
-            ],
+            "execution_plan": execution_plan,  # 使用优化后的执行计划
             "estimated_complexity": complexity.replace("🟢 **复杂度**: ", "").replace("🟡 **复杂度**: ", "").replace("🔴 **复杂度**: ", ""),
             "complexity_level": "low" if "🟢" in complexity else "high" if "🔴" in complexity else "medium",
             "suggested_model": None,
             "context_requirements": {},
-            "suggested_tools": suggested_tools,  # 添加建议工具字段
+            "suggested_tools": suggested_tools,  # 只返回执行计划中需要的工具
             "thinking_duration": "completed",
             "timestamp": datetime.now().isoformat(),
             "metadata": {
@@ -880,6 +1192,8 @@ class ThinkingAgent:
                 "key_points_count": len(key_points),
                 "analysis_quality": "good" if len(key_points) >= 2 else "basic",
                 "tools_suggested": len(suggested_tools),
+                "plan_steps": len(execution_plan),
+                "executable_steps": len([plan for plan in execution_plan if plan.get("expected_tools")]),
             },
         }
 
