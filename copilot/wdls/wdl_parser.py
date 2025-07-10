@@ -1,9 +1,10 @@
-import os
+import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Union
-from WDL.Expr import Base
 
 import WDL
+from WDL.Expr import Base
 from WDL.Tree import Call, Conditional, Decl, Document, Scatter, Task, Workflow
 
 
@@ -145,7 +146,6 @@ class SimpleWDLParser:
                     "type": str(inp.type),
                     "optional": self._safe_getattr(inp.type, "optional", False),
                     "default_value": None,
-                    "help": self._safe_getattr(inp, "help"),
                 }
 
                 if hasattr(inp, "expr") and inp.expr is not None:
@@ -548,8 +548,6 @@ class SimpleWDLParser:
 
     def _extract_variables_from_string_interpolation(self, string_value: str) -> List[str]:
         """从字符串插值表达式中提取变量名"""
-        import re
-
         variables = set()
 
         # 匹配 ~{变量名} 格式
@@ -1082,8 +1080,6 @@ if __name__ == "__main__":
     print("解析器创建成功")
 
     summary = parser.get_workflow_summary()
-
-    import json
 
     summary = json.dumps(summary, indent=4)
 
