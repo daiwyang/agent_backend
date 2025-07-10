@@ -34,6 +34,12 @@ class SimpleWDLParser:
         self._expression_cache: Dict[int, Dict[str, Any]] = {}
         self._variables_cache: Dict[int, List[str]] = {}
 
+        # 新增：变量定义和使用追踪
+        self.variable_definitions: Dict[str, Dict[str, Any]] = {}
+        self.variable_usage: Dict[str, List[Dict[str, Any]]] = {}
+        self.assignment_nodes: List[Dict[str, Any]] = []
+        self.dependency_graph: Dict[str, Dict[str, Any]] = {}
+
         # 验证文件存在性
         if not self.wdl_path.exists():
             raise WDLParseError(f"WDL文件不存在: {wdl_path}")
@@ -77,7 +83,13 @@ class SimpleWDLParser:
 
         workflow = self.doc.workflow
 
-        # 收集所有信息
+        # 1. 分析变量定义和使用
+        self._analyze_variables()
+
+        # 2. 构建依赖图
+        self._build_dependency_graph()
+
+        # 3. 收集所有信息
         calls = self._get_all_calls()
         conditionals = self._get_conditionals()
         scatters = self._get_scatters()
@@ -91,6 +103,10 @@ class SimpleWDLParser:
             "calls": calls,
             "conditionals": conditionals,
             "scatters": scatters,
+            "variable_definitions": self.variable_definitions,
+            "variable_usage": self.variable_usage,
+            "assignment_nodes": self.assignment_nodes,
+            "dependency_graph": self.dependency_graph,
             "execution_structure": self._build_execution_structure(calls, conditionals, scatters),
             "imports": self._get_imports(),
             "tasks": self._get_task_definitions(),
@@ -114,9 +130,12 @@ class SimpleWDLParser:
         except Exception as e:
             return {"type": "error", "error": str(e)}
 
-    def _parse_workflow_inputs(self, inputs) -> List[Dict[str, Any]]:
+    def _parse_workflow_inputs(self, inputs: List[Decl] | None) -> List[Dict[str, Any]]:
         """解析工作流输入，使用安全解析"""
         parsed_inputs = []
+
+        if inputs is None:
+            return []
 
         for inp in inputs:
 
@@ -130,7 +149,7 @@ class SimpleWDLParser:
                 }
 
                 if hasattr(inp, "expr") and inp.expr is not None:
-                    input_info["default_value"] = self._safe_expression_to_string(inp.expr)
+                    input_info["default_value"] = self._parse_expression_value(inp.expr)
 
                 return input_info
 
@@ -142,9 +161,12 @@ class SimpleWDLParser:
 
         return parsed_inputs
 
-    def _parse_workflow_outputs(self, outputs) -> List[Dict[str, Any]]:
+    def _parse_workflow_outputs(self, outputs: List[Decl] | None) -> List[Dict[str, Any]]:
         """解析工作流输出，使用安全解析"""
         parsed_outputs = []
+
+        if outputs is None:
+            return []
 
         for outp in outputs:
 
@@ -152,7 +174,7 @@ class SimpleWDLParser:
                 return {
                     "name": outp.name,
                     "type": str(outp.type),
-                    "expression": self._safe_expression_to_string(outp.expr) if outp.expr else None,
+                    "expression": self._parse_expression_value(outp.expr) if outp.expr else None,
                 }
 
             result = self._safe_parse(parse_output)
@@ -163,12 +185,31 @@ class SimpleWDLParser:
 
         return parsed_outputs
 
-    def _safe_expression_to_string(self, expr) -> str:
-        """安全地将表达式转换为字符串"""
+    def _parse_expression_value(self, expr) -> Any:
+        """解析表达式的值，保持原始类型
+
+        这个方法用于解析WDL表达式，并尽可能保持原始数据类型：
+
+        Args:
+            expr: WDL表达式对象
+
+        Returns:
+            解析后的值，可能是原始类型或字符串
+        """
         try:
+            if expr is None:
+                return None
+
+            # 如果是字面量，尝试解析为原始类型
+            if hasattr(expr, "value"):
+                return expr.value
+            # 对于复杂表达式（变量引用、条件表达式、函数调用等），
+            # 返回字符串表示以保持表达式的完整性和可读性
+            if hasattr(expr, "literal") and expr.literal is not None:
+                return expr.literal.value
             return str(expr)
-        except Exception:
-            return "<无法解析的表达式>"
+        except Exception as e:
+            return f"<expression_error: {str(e)}>"
 
     def _get_tasks_used(self) -> List[str]:
         """获取工作流中使用的所有任务"""
@@ -232,7 +273,7 @@ class SimpleWDLParser:
                         "type": "conditional",
                         "id": cond_id,
                         "level": context_info["level"] + 1,
-                        "condition": self._safe_expression_to_string(elem.expr),
+                        "condition": self._parse_expression_value(elem.expr),
                         "parent": context_info["id"],
                     }
                     context_stack.append(new_context)
@@ -246,7 +287,7 @@ class SimpleWDLParser:
                         "id": scatter_id,
                         "level": context_info["level"] + 1,
                         "variable": elem.variable,
-                        "collection": self._safe_expression_to_string(elem.expr),
+                        "collection": self._parse_expression_value(elem.expr),
                         "parent": context_info["id"],
                     }
                     context_stack.append(new_context)
@@ -268,7 +309,7 @@ class SimpleWDLParser:
             try:
                 parsed_inputs[key] = self._parse_expression_advanced(expr)
             except Exception as e:
-                parsed_inputs[key] = {"type": "error", "error": str(e), "raw": self._safe_expression_to_string(expr)}
+                parsed_inputs[key] = {"type": "error", "error": str(e), "raw": self._parse_expression_value(expr)}
 
         return parsed_inputs
 
@@ -284,7 +325,7 @@ class SimpleWDLParser:
                 output_info = {
                     "name": output.name,
                     "type": str(output.type),
-                    "expression": self._safe_expression_to_string(output.expr) if output.expr else None,
+                    "expression": self._parse_expression_value(output.expr) if output.expr else None,
                 }
                 parsed_outputs[output.name] = output_info
         except Exception as e:
@@ -577,6 +618,130 @@ class SimpleWDLParser:
         """统一的警告输出"""
         print(f"警告: {message}")
 
+    def _analyze_variables(self):
+        """分析变量定义和使用"""
+        if not self.doc or not self.doc.workflow:
+            return
+
+        # 遍历工作流体，收集变量定义
+        self._collect_variable_definitions(self.doc.workflow.body)
+
+        # 遍历所有调用，收集变量使用
+        self._collect_variable_usage(self.doc.workflow.body)
+
+    def _collect_variable_definitions(self, elements):
+        """收集变量定义
+
+        遍历工作流元素，收集所有变量声明和赋值信息。
+        使用 _parse_expression_value 方法解析表达式，保持原始数据类型。
+
+        收集的信息包括：
+        - 变量名称和类型
+        - 表达式值（保持原始类型）
+        - 依赖关系
+        - 位置信息
+
+        同时创建赋值节点，用于构建执行依赖图。
+        """
+        for elem in elements:
+            if isinstance(elem, Decl):
+                # 变量声明
+                var_name = elem.name
+                var_type = str(elem.type)
+                # 使用新的表达式解析方法，保持原始数据类型
+                var_expr = self._parse_expression_value(elem.expr) if elem.expr else None
+
+                self.variable_definitions[var_name] = {
+                    "type": var_type,
+                    "expression": var_expr,
+                    "location": "workflow_level",
+                    "dependencies": self._extract_variables_from_expression(elem.expr) if elem.expr else [],
+                }
+
+                # 创建赋值节点，用于依赖分析
+                assignment_node = {
+                    "type": "variable_assignment",
+                    "name": var_name,
+                    "variable_type": var_type,
+                    "expression": var_expr,
+                    "dependencies": self._extract_variables_from_expression(elem.expr) if elem.expr else [],
+                    "location": "workflow_level",
+                }
+                self.assignment_nodes.append(assignment_node)
+
+            elif isinstance(elem, Conditional):
+                # 条件块内的变量
+                self._collect_variable_definitions(elem.body)
+
+            elif isinstance(elem, Scatter):
+                # Scatter块内的变量
+                self._collect_variable_definitions(elem.body)
+
+    def _collect_variable_usage(self, elements):
+        """收集变量使用"""
+        for elem in elements:
+            if isinstance(elem, Call):
+                # 调用中的变量使用
+                inputs = elem.inputs if hasattr(elem, "inputs") else {}
+                for input_name, input_expr in inputs.items():
+                    variables = self._extract_variables_from_expression(input_expr)
+                    for var in variables:
+                        if var not in self.variable_usage:
+                            self.variable_usage[var] = []
+                        self.variable_usage[var].append(
+                            {"call": elem.name, "input": input_name, "expression": self._parse_expression_value(input_expr)}
+                        )
+
+            elif isinstance(elem, Conditional):
+                # 条件块内的变量使用
+                self._collect_variable_usage(elem.body)
+
+            elif isinstance(elem, Scatter):
+                # Scatter块内的变量使用
+                self._collect_variable_usage(elem.body)
+
+    def _extract_variables_from_expression(self, expr) -> List[str]:
+        """从表达式中提取变量
+
+        使用AST遍历来准确提取变量引用，避免将字符串字面量误识别为变量。
+        """
+        if not expr:
+            return []
+
+        # 使用更准确的AST遍历方法
+        return self._extract_variables_from_ast(expr)
+
+    def _build_dependency_graph(self):
+        """构建依赖图"""
+        # 初始化依赖图
+        all_nodes = set()
+
+        # 添加所有赋值节点
+        for assignment in self.assignment_nodes:
+            node_name = f"assign_{assignment['name']}"
+            all_nodes.add(node_name)
+            self.dependency_graph[node_name] = {"type": "variable_assignment", "dependencies": assignment["dependencies"], "info": assignment}
+
+        # 添加所有调用节点
+        calls = self._get_all_calls()
+        for call in calls:
+            node_name = call["name"]
+            all_nodes.add(node_name)
+            self.dependency_graph[node_name] = {"type": "call", "dependencies": call.get("dependencies", []), "info": call}
+
+        # 构建依赖关系
+        for node_name, node_info in self.dependency_graph.items():
+            dependencies = []
+            for dep in node_info["dependencies"]:
+                # 检查是否是变量赋值
+                if f"assign_{dep}" in all_nodes:
+                    dependencies.append(f"assign_{dep}")
+                # 检查是否是任务调用
+                elif dep in all_nodes:
+                    dependencies.append(dep)
+
+            node_info["dependencies"] = dependencies
+
     def _traverse_workflow_elements(self, elements, visitor_func, parent_context=None):
         """通用的工作流元素遍历器
 
@@ -610,7 +775,7 @@ class SimpleWDLParser:
                 conditionals.append(
                     {
                         "id": f"conditional_{conditional_counter}",
-                        "condition": self._safe_expression_to_string(elem.expr),
+                        "condition": self._parse_expression_value(elem.expr),
                         "calls_inside": len(calls_in_conditional),
                         "calls": calls_in_conditional,
                         "parent": parent_context,
@@ -637,7 +802,7 @@ class SimpleWDLParser:
                 scatters.append(
                     {
                         "variable": elem.variable,
-                        "collection": self._safe_expression_to_string(elem.expr),
+                        "collection": self._parse_expression_value(elem.expr),
                         "calls_inside": len(calls_in_scatter),
                         "calls": calls_in_scatter,
                         "parent": parent_context,
@@ -697,9 +862,24 @@ class SimpleWDLParser:
         return structure
 
     def _build_execution_sequence(self, calls: List, conditionals: List, scatters: List) -> List[Dict[str, Any]]:
-        """构建清晰的执行序列，按工作流定义顺序"""
+        """构建增强的执行序列，包含变量赋值和调用"""
         sequence = []
 
+        # 1. 添加变量赋值节点
+        for assignment in self.assignment_nodes:
+            sequence_item = {
+                "step_type": "variable_assignment",
+                "step_id": f"assign_{assignment['name']}",
+                "variable_name": assignment["name"],
+                "variable_type": assignment["variable_type"],
+                "expression": assignment["expression"],
+                "dependencies": assignment["dependencies"],
+                "execution_order": len(sequence) + 1,
+                "context": {"type": "workflow_level", "parent": "root"},
+            }
+            sequence.append(sequence_item)
+
+        # 2. 添加调用节点
         # 按位置排序调用
         sorted_calls = sorted(calls, key=lambda x: x.get("position", 0))
 
@@ -844,7 +1024,7 @@ class SimpleWDLParser:
                 output_info = {
                     "name": outp.name,
                     "type": str(outp.type),
-                    "expression": self._safe_expression_to_string(outp.expr) if outp.expr else None,
+                    "expression": self._parse_expression_value(outp.expr) if outp.expr else None,
                 }
                 parsed_outputs.append(output_info)
             except Exception as e:
@@ -898,65 +1078,14 @@ class SimpleWDLParser:
 if __name__ == "__main__":
     print("开始解析WDL文件...")
     # 使用简化的解析器
-    parser = SimpleWDLParser("/data/agent_backend/copilot/wdls/SAW-ST-6.1-alpha3-FFPE-early-access.wdl")
+    parser = SimpleWDLParser("/data/agent_backend/docs/wdl/SAW-ST-V8.wdl")
     print("解析器创建成功")
 
     summary = parser.get_workflow_summary()
-
-    # 验证统一的 parent 字段设计
-    print("\n验证统一的 parent 字段设计:")
-    calls = summary.get("calls", [])
-    for i, call in enumerate(calls[:8]):  # 显示前8个调用
-        context = call.get("context", {})
-        print(f"调用 {i+1}: {call.get('name')}")
-        print(f"  - context.id: {context.get('id')}")
-        print(f"  - context.type: {context.get('type')}")
-        print(f"  - context.parent: {context.get('parent')}")
-        print(f"  - context.level: {context.get('level')}")
-        print()
-
-    # 验证条件块和call的ID对应关系
-    print("验证条件块和call的ID对应关系:")
-    conditionals = summary.get("conditionals", [])
-    for i, conditional in enumerate(conditionals[:5]):  # 显示前5个条件块
-        print(f"条件块 {i+1}:")
-        print(f"  - id: {conditional.get('id')}")
-        print(f"  - condition: {conditional.get('condition')}")
-        print(f"  - calls_inside: {conditional.get('calls_inside')}")
-        print(f"  - calls: {[call.get('name') for call in conditional.get('calls', [])]}")
-        print(f"  - parent: {conditional.get('parent')}")
-        print()
-
-    # 验证scatter块的parent_context
-    print("验证scatter块的parent_context:")
-    scatters = summary.get("scatters", [])
-    for i, scatter in enumerate(scatters[:3]):  # 显示前3个scatter块
-        print(f"Scatter块 {i+1}:")
-        print(f"  - variable: {scatter.get('variable')}")
-        print(f"  - collection: {scatter.get('collection')}")
-        print(f"  - calls_inside: {scatter.get('calls_inside')}")
-        print(f"  - calls: {[call.get('name') for call in scatter.get('calls', [])]}")
-        print(f"  - parent: {scatter.get('parent')}")
-        print()
-
-    # 验证新的执行序列
-    print("验证执行序列:")
-    execution_sequence = summary.get("execution_structure", {}).get("execution_sequence", [])
-    for i, step in enumerate(execution_sequence[:10]):  # 显示前10个执行步骤
-        print(f"步骤 {step.get('execution_order')}: {step.get('step_id')}")
-        print(f"  - step_type: {step.get('step_type')}")
-        print(f"  - task_name: {step.get('task_name')}")
-        print(f"  - context_type: {step.get('context', {}).get('type')}")
-        if step.get("context", {}).get("type") == "conditional":
-            print(f"  - condition: {step.get('context', {}).get('condition')}")
-        elif step.get("context", {}).get("type") == "scatter":
-            print(f"  - variable: {step.get('context', {}).get('variable')}")
-        print(f"  - dependencies: {step.get('dependencies')}")
-        print()
 
     import json
 
     summary = json.dumps(summary, indent=4)
 
-    with open("/data/agent_backend/copilot/wdls/SAW-ST-6.1-alpha3-FFPE-early-access.json", "w") as f:
+    with open("/data/agent_backend/docs/wdl/SAW-ST-V8.json", "w") as f:
         f.write(summary)
