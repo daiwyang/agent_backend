@@ -102,7 +102,7 @@ class WDLFlowchartGenerator:
         """生成Mermaid样式定义"""
         return [
             "    %% 节点样式定义",
-            "    classDef inputNode fill:#fff9c4,stroke:#f57f17,stroke-width:2px",
+            "    classDef inputNode fill:#fff9c4,stroke:#f57f17,stroke-width:2px,stroke-dasharray: 5 3",
             "    classDef outputNode fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px",
             "    classDef callNode fill:#e3f2fd,stroke:#1976d2,stroke-width:2px",
             "    classDef intVar fill:#e8f5e8,stroke:#388e3c,stroke-width:1px",
@@ -256,17 +256,67 @@ class WDLFlowchartGenerator:
             expression = output_param.get("expression", "")
             output_node_id = self._sanitize_node_id(f"output_{output_name}")
 
-            # 简单模式：匹配任务名.输出名
-            task_match = re.match(r"([a-zA-Z_][a-zA-Z0-9_]*)\.", expression)
-            if task_match:
-                task_name = task_match.group(1)
+            # 查找表达式中的所有任务名
+            # 匹配模式：task_name.output_name 或 task_name['output_name']
+            task_patterns = [
+                r"([a-zA-Z_][a-zA-Z0-9_]*)\.[a-zA-Z_][a-zA-Z0-9_]*",  # task_name.output_name
+                r"([a-zA-Z_][a-zA-Z0-9_]*)\['[^']*'\]",  # task_name['output_name']
+                r"([a-zA-Z_][a-zA-Z0-9_]*)\[[^]]*\]"  # task_name[output_name]
+            ]
+            
+            found_tasks = set()
+            for pattern in task_patterns:
+                matches = re.findall(pattern, expression)
+                found_tasks.update(matches)
+            
+            # 为每个找到的任务创建边
+            for task_name in found_tasks:
                 src_node_id = self._sanitize_node_id(f"task_{task_name}")
-
+                
                 if src_node_id in all_node_ids and output_node_id in all_node_ids:
                     edge = (src_node_id, output_node_id)
                     if edge not in added_edges:
                         edges.append(f"    {src_node_id} --> {output_node_id}")
                         added_edges.add(edge)
+
+        # 4. Runtime变量边
+        for call in self.calls:
+            call_name = call.get("name")
+            task_name = call.get("task")
+            task_node_id = self._sanitize_node_id(f"task_{call_name}")
+
+            # 查找对应的任务定义以获取runtime信息
+            if task_name:
+                for task in self.tasks:
+                    if task.get("name") == task_name:
+                        runtime = task.get("runtime", {})
+                        for key, value in runtime.items():
+                            if isinstance(value, dict) and "name" in value:
+                                var_name = value["name"]
+                                if self._is_workflow_input(var_name):
+                                    src_node_id = self._sanitize_node_id(f"input_{var_name}")
+                                else:
+                                    src_node_id = self._sanitize_node_id(f"var_{var_name}")
+
+                                if src_node_id in all_node_ids and task_node_id in all_node_ids:
+                                    edge = (src_node_id, task_node_id)
+                                    if edge not in added_edges:
+                                        edges.append(f"    {src_node_id} --> {task_node_id}")
+                                        added_edges.add(edge)
+                            elif isinstance(value, dict) and "variables" in value:
+                                variables = value.get("variables", [])
+                                for var_name in variables:
+                                    if self._is_workflow_input(var_name):
+                                        src_node_id = self._sanitize_node_id(f"input_{var_name}")
+                                    else:
+                                        src_node_id = self._sanitize_node_id(f"var_{var_name}")
+
+                                    if src_node_id in all_node_ids and task_node_id in all_node_ids:
+                                        edge = (src_node_id, task_node_id)
+                                        if edge not in added_edges:
+                                            edges.append(f"    {src_node_id} --> {task_node_id}")
+                                            added_edges.add(edge)
+                        break
 
         return edges
 
@@ -315,7 +365,7 @@ class WDLFlowchartGenerator:
 
 def main():
     """主函数"""
-    json_file = "docs/wdl/SAW-ST-V8.json"
+    json_file = "docs/wdl/st_pipeline.json"
 
     generator = WDLFlowchartGenerator(json_file)
     print("生成WDL工作流程图...")

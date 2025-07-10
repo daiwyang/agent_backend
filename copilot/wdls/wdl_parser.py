@@ -1076,12 +1076,12 @@ class SimpleWDLParser:
 if __name__ == "__main__":
     print("开始解析WDL文件...")
     # 使用简化的解析器
-    parser = SimpleWDLParser("/data/agent_backend/docs/wdl/SAW-ST-V8.wdl")
+    parser = SimpleWDLParser("/data/agent_backend/docs/wdl/st_pipeline.wdl")
     print("解析器创建成功")
 
     summary = parser.get_workflow_summary()
 
     summary = json.dumps(summary, indent=4)
 
-    with open("/data/agent_backend/docs/wdl/SAW-ST-V8.json", "w") as f:
+    with open("/data/agent_backend/docs/wdl/st_pipeline.json", "w") as f:
         f.write(summary)
