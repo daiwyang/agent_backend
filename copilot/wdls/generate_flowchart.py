@@ -105,6 +105,7 @@ class WDLFlowchartGenerator:
             "    classDef inputNode fill:#fff9c4,stroke:#f57f17,stroke-width:2px,stroke-dasharray: 5 3",
             "    classDef outputNode fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px",
             "    classDef callNode fill:#e3f2fd,stroke:#1976d2,stroke-width:2px",
+            "    classDef conditionNode fill:#fff8e1,stroke:#ff8f00,stroke-width:2px",
             "    classDef intVar fill:#e8f5e8,stroke:#388e3c,stroke-width:1px",
             "    classDef floatVar fill:#e8f5e8,stroke:#388e3c,stroke-width:1px",
             "    classDef stringVar fill:#e1f5fe,stroke:#0277bd,stroke-width:1px",
@@ -141,19 +142,56 @@ class WDLFlowchartGenerator:
         nodes = []
         node_ids = set()
 
-        for output_param in self.workflow_outputs:
-            output_name = output_param.get("name")
+        # 如果输出节点超过3个，则按模式分组合并
+        if len(self.workflow_outputs) > 3:
+            # 按输出名称的前缀进行分组
+            output_groups = {}
+            
+            for output in self.workflow_outputs:
+                output_name = output.get("name", "")
+                if not output_name:
+                    continue
+                
+                # 提取前缀（如 out00_, out01_, out02_ 等）
+                prefix = ""
+                if "_" in output_name:
+                    prefix = output_name.split("_")[0] + "_"
+                else:
+                    prefix = output_name[:3] + "_"  # 取前3个字符作为前缀
+                
+                if prefix not in output_groups:
+                    output_groups[prefix] = []
+                output_groups[prefix].append(output)
+            
+            # 为每个分组创建输出节点
+            for prefix, outputs in output_groups.items():
+                group_id = f"output_{prefix.rstrip('_')}"
+                sanitized_id = self._sanitize_node_id(group_id)
+                
+                # 显示该分组的主要输出类型
+                output_names = [output.get("name", "") for output in outputs]
+                display_names = [self._sanitize_text(name, 12) for name in output_names[:3]]  # 只显示前3个
+                if len(output_names) > 3:
+                    display_names.append(f"...等{len(output_names)}个")
+                
+                nodes.append(f"    {sanitized_id}[输出: {', '.join(display_names)}]")
+                nodes.append(f"    class {sanitized_id} outputNode")
+                node_ids.add(sanitized_id)
+        else:
+            # 正常创建每个输出节点
+            for output_param in self.workflow_outputs:
+                output_name = output_param.get("name")
 
-            if not output_name:
-                continue
+                if not output_name:
+                    continue
 
-            node_id = f"output_{output_name}"
-            sanitized_id = self._sanitize_node_id(node_id)
-            display_name = self._sanitize_text(output_name, 20)
+                node_id = f"output_{output_name}"
+                sanitized_id = self._sanitize_node_id(node_id)
+                display_name = self._sanitize_text(output_name, 20)
 
-            nodes.append(f"    {sanitized_id}[输出: {display_name}]")
-            nodes.append(f"    class {sanitized_id} outputNode")
-            node_ids.add(sanitized_id)
+                nodes.append(f"    {sanitized_id}[输出: {display_name}]")
+                nodes.append(f"    class {sanitized_id} outputNode")
+                node_ids.add(sanitized_id)
 
         return nodes, node_ids
 
@@ -205,19 +243,44 @@ class WDLFlowchartGenerator:
 
         return nodes, node_ids
 
-    def _create_edges(self, all_node_ids: Set[str]) -> List[str]:
-        """创建边连接"""
-        edges = []
-        added_edges = set()
+    def _create_condition_nodes(self) -> Tuple[List[str], Set[str]]:
+        """创建条件节点"""
+        nodes = []
+        node_ids = set()
 
-        # 1. 变量依赖边
+        for call in self.calls:
+            context = call.get("context", {})
+            
+            if context.get("type") == "conditional" and context.get("condition"):
+                condition_id = context.get("id", f"condition_{len(node_ids)}")
+                
+                node_id = f"condition_{condition_id}"
+                sanitized_id = self._sanitize_node_id(node_id)
+                
+                # 只显示条件ID，不显示表达式
+                nodes.append(f"    {sanitized_id}{{{condition_id}}}")
+                nodes.append(f"    class {sanitized_id} conditionNode")
+                node_ids.add(sanitized_id)
+
+        return nodes, node_ids
+
+    def _create_variable_dependency_edges(self, all_node_ids: Set[str], added_edges: Set[Tuple[str, str]]) -> List[str]:
+        """创建变量依赖边"""
+        edges = []
+
         for var_name, var_def in self.variable_definitions.items():
             var_node_id = self._sanitize_node_id(f"var_{var_name}")
             dependencies = var_def.get("dependencies", [])
+            expression = var_def.get("expression", "")
 
+            # 处理显式依赖
             for dep in dependencies:
+                # 检查是否为任务输出 (格式: task_name.output_name)
+                if "." in dep:
+                    task_name, output_name = dep.split(".", 1)
+                    dep_node_id = self._sanitize_node_id(f"task_{task_name}")
                 # 检查是否为输入参数
-                if self._is_workflow_input(dep):
+                elif self._is_workflow_input(dep):
                     dep_node_id = self._sanitize_node_id(f"input_{dep}")
                 else:
                     dep_node_id = self._sanitize_node_id(f"var_{dep}")
@@ -228,7 +291,25 @@ class WDLFlowchartGenerator:
                         edges.append(f"    {dep_node_id} --> {var_node_id}")
                         added_edges.add(edge)
 
-        # 2. 任务输入边
+            # 处理表达式中的隐式依赖
+            if expression:
+                expr_str = str(expression)
+                # 查找表达式中的变量名
+                for other_var_name in self.variable_definitions.keys():
+                    if other_var_name in expr_str and other_var_name != var_name:
+                        other_var_node_id = self._sanitize_node_id(f"var_{other_var_name}")
+                        if other_var_node_id in all_node_ids and var_node_id in all_node_ids:
+                            edge = (other_var_node_id, var_node_id)
+                            if edge not in added_edges:
+                                edges.append(f"    {other_var_node_id} --> {var_node_id}")
+                                added_edges.add(edge)
+
+        return edges
+
+    def _create_task_input_edges(self, all_node_ids: Set[str], added_edges: Set[Tuple[str, str]]) -> List[str]:
+        """创建任务输入边"""
+        edges = []
+
         for call in self.calls:
             call_name = call.get("name")
             task_inputs = call.get("inputs", {})
@@ -250,18 +331,56 @@ class WDLFlowchartGenerator:
                             edges.append(f"    {src_node_id} --> {task_node_id}")
                             added_edges.add(edge)
 
-        # 3. 输出边
+        return edges
+
+    def _create_output_edges(self, all_node_ids: Set[str], added_edges: Set[Tuple[str, str]]) -> List[str]:
+        """创建输出边"""
+        edges = []
+        
+        # 检查是否使用了分组的输出节点
+        grouped_output = len(self.workflow_outputs) > 3
+        
+        if grouped_output:
+            # 按前缀分组输出
+            output_groups = {}
+            for output in self.workflow_outputs:
+                output_name = output.get("name", "")
+                if not output_name:
+                    continue
+                
+                prefix = ""
+                if output_name and "_" in output_name:
+                    prefix = output_name.split("_")[0] + "_"
+                elif output_name:
+                    prefix = output_name[:3] + "_"
+                
+                if prefix not in output_groups:
+                    output_groups[prefix] = []
+                output_groups[prefix].append(output)
+        
         for output_param in self.workflow_outputs:
             output_name = output_param.get("name")
             expression = output_param.get("expression", "")
-            output_node_id = self._sanitize_node_id(f"output_{output_name}")
+            
+            # 根据是否分组选择输出节点ID
+            if grouped_output and output_name:
+                # 找到该输出属于哪个分组
+                prefix = ""
+                if "_" in output_name:
+                    prefix = output_name.split("_")[0] + "_"
+                else:
+                    prefix = output_name[:3] + "_"
+                
+                output_node_id = self._sanitize_node_id(f"output_{prefix.rstrip('_')}")
+            else:
+                output_node_id = self._sanitize_node_id(f"output_{output_name}")
 
             # 查找表达式中的所有任务名
             # 匹配模式：task_name.output_name 或 task_name['output_name']
             task_patterns = [
                 r"([a-zA-Z_][a-zA-Z0-9_]*)\.[a-zA-Z_][a-zA-Z0-9_]*",  # task_name.output_name
                 r"([a-zA-Z_][a-zA-Z0-9_]*)\['[^']*'\]",  # task_name['output_name']
-                r"([a-zA-Z_][a-zA-Z0-9_]*)\[[^]]*\]"  # task_name[output_name]
+                r"([a-zA-Z_][a-zA-Z0-9_]*)\[[^]]*\]",  # task_name[output_name]
             ]
             
             found_tasks = set()
@@ -269,7 +388,7 @@ class WDLFlowchartGenerator:
                 matches = re.findall(pattern, expression)
                 found_tasks.update(matches)
             
-            # 为每个找到的任务创建边
+            # 为每个找到的任务创建边（使用实线）
             for task_name in found_tasks:
                 src_node_id = self._sanitize_node_id(f"task_{task_name}")
                 
@@ -278,8 +397,13 @@ class WDLFlowchartGenerator:
                     if edge not in added_edges:
                         edges.append(f"    {src_node_id} --> {output_node_id}")
                         added_edges.add(edge)
+        
+        return edges
 
-        # 4. Runtime变量边
+    def _create_runtime_edges(self, all_node_ids: Set[str], added_edges: Set[Tuple[str, str]]) -> List[str]:
+        """创建Runtime变量边"""
+        edges = []
+
         for call in self.calls:
             call_name = call.get("name")
             task_name = call.get("task")
@@ -320,6 +444,77 @@ class WDLFlowchartGenerator:
 
         return edges
 
+    def _create_condition_edges(self, all_node_ids: Set[str], added_edges: Set[Tuple[str, str]]) -> List[str]:
+        """创建条件节点边"""
+        edges = []
+        
+        condition_count = 0
+        for call in self.calls:
+            call_name = call.get("name")
+            context = call.get("context", {})
+            
+            if context.get("type") == "conditional" and context.get("condition"):
+                condition_id = context.get("id", f"condition_{condition_count}")
+                condition_node_id = self._sanitize_node_id(f"condition_{condition_id}")
+                task_node_id = self._sanitize_node_id(f"task_{call_name}")
+                
+                # 条件节点连接到任务节点（使用虚线）
+                if condition_node_id in all_node_ids and task_node_id in all_node_ids:
+                    edge = (condition_node_id, task_node_id)
+                    if edge not in added_edges:
+                        edges.append(f"    {condition_node_id} -.-> {task_node_id}")
+                        added_edges.add(edge)
+                
+                # 查找条件中使用的变量，建立输入到条件的连接
+                condition = context.get("condition", "")
+                
+                # 检查输入参数
+                for input_param in self.workflow_inputs:
+                    input_name = input_param.get("name")
+                    if input_name and input_name in condition:
+                        input_node_id = self._sanitize_node_id(f"input_{input_name}")
+                        if input_node_id in all_node_ids and condition_node_id in all_node_ids:
+                            edge = (input_node_id, condition_node_id)
+                            if edge not in added_edges:
+                                edges.append(f"    {input_node_id} --> {condition_node_id}")
+                                added_edges.add(edge)
+                
+                # 检查变量定义
+                for var_name in self.variable_definitions.keys():
+                    if var_name and var_name in condition:
+                        var_node_id = self._sanitize_node_id(f"var_{var_name}")
+                        if var_node_id in all_node_ids and condition_node_id in all_node_ids:
+                            edge = (var_node_id, condition_node_id)
+                            if edge not in added_edges:
+                                edges.append(f"    {var_node_id} --> {condition_node_id}")
+                                added_edges.add(edge)
+                
+                condition_count += 1
+        
+        return edges
+
+    def _create_edges(self, all_node_ids: Set[str]) -> List[str]:
+        """创建所有边连接"""
+        edges = []
+        added_edges = set()
+
+        # 1. 变量依赖边
+        edges.extend(self._create_variable_dependency_edges(all_node_ids, added_edges))
+
+        # 2. 任务输入边
+        edges.extend(self._create_task_input_edges(all_node_ids, added_edges))
+
+        # 3. 输出边
+        edges.extend(self._create_output_edges(all_node_ids, added_edges))
+
+        # 4. Runtime变量边
+        edges.extend(self._create_runtime_edges(all_node_ids, added_edges))
+
+        # 5. 条件节点边
+        edges.extend(self._create_condition_edges(all_node_ids, added_edges))
+
+        return edges
+
     def generate_flowchart(self) -> str:
         """生成流程图"""
         if not self.data:
@@ -349,6 +544,11 @@ class WDLFlowchartGenerator:
         mermaid_lines.extend(task_nodes)
         all_node_ids.update(task_ids)
 
+        # 条件节点
+        condition_nodes, condition_ids = self._create_condition_nodes()
+        mermaid_lines.extend(condition_nodes)
+        all_node_ids.update(condition_ids)
+
         # 输出节点
         output_nodes, output_ids = self._create_output_nodes()
         mermaid_lines.extend(output_nodes)
@@ -365,7 +565,7 @@ class WDLFlowchartGenerator:
 
 def main():
     """主函数"""
-    json_file = "docs/wdl/st_pipeline.json"
+    json_file = "docs/wdl/SAW-ST-6.1-alpha3-FFPE-early-access.json"
 
     generator = WDLFlowchartGenerator(json_file)
     print("生成WDL工作流程图...")
