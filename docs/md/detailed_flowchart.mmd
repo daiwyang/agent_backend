@@ -1,0 +1,66 @@
+graph TD
+    %% 样式定义
+    classDef workflowNode fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef conditionalNode fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    classDef scatterNode fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    classDef dependencyEdge stroke:#ff5722,stroke-width:2px
+    classDef sequenceEdge stroke:#4caf50,stroke-width:1px
+    RefRead[步骤1: RefRead<br/>RefRead]
+    class RefRead workflowNode
+    SplitBarcodeBin{步骤2: SplitBarcodeBin<br/>SplitBarcodeBin<br/>条件: !whetherPE}
+    class SplitBarcodeBin conditionalNode
+    GetFQlist[步骤3: GetFQlist<br/>GetFQlist]
+    class GetFQlist workflowNode
+    BcNumCountPE{步骤4: BcNumCountPE<br/>BcNumCountPE<br/>条件: whetherPE}
+    class BcNumCountPE conditionalNode
+    BcNumCountSE{步骤5: BcNumCountSE<br/>BcNumCountSE<br/>条件: !whetherPE}
+    class BcNumCountSE conditionalNode
+    BarcodeMappingAndStar[/步骤6: BarcodeMappingAndStar<br/>BarcodeMappingAndStar_v2<br/>scatter: index/]
+    class BarcodeMappingAndStar scatterNode
+    GetExpSE{步骤7: GetExpSE<br/>GetExp<br/>条件: !whetherPE}
+    class GetExpSE conditionalNode
+    GetExpPE{步骤8: GetExpPE<br/>GetExp<br/>条件: whetherPE}
+    class GetExpPE conditionalNode
+    MergeBarcodeReadsCount[步骤9: MergeBarcodeReadsCount<br/>MergeBarcodeReadsCount]
+    class MergeBarcodeReadsCount workflowNode
+    Register_vea[步骤10: Register_vea<br/>Register_vea]
+    class Register_vea workflowNode
+    TissueCut_vea[步骤11: TissueCut_vea<br/>TissueCut_vea]
+    class TissueCut_vea workflowNode
+    ReadsUnmappedRmHost[/步骤12: ReadsUnmappedRmHost<br/>ReadsUnmappedRmHost<br/>scatter: index/]
+    class ReadsUnmappedRmHost scatterNode
+    MicrobiomeAnalysis{步骤13: MicrobiomeAnalysis<br/>MicrobiomeAnalysis<br/>条件: Micro == 1}
+    class MicrobiomeAnalysis conditionalNode
+    SpatialCluster[步骤14: SpatialCluster<br/>SpatialCluster]
+    class SpatialCluster workflowNode
+    CellCut{步骤15: CellCut<br/>CellCut<br/>条件: DoCellbin}
+    class CellCut conditionalNode
+    CellCluster{步骤16: CellCluster<br/>CellCluster<br/>条件: DoCellbin}
+    class CellCluster conditionalNode
+    Saturation[步骤17: Saturation<br/>Saturation]
+    class Saturation workflowNode
+    Report_v2[步骤18: Report_v2<br/>Report_v2]
+    class Report_v2 workflowNode
+    RefRead -->|顺序| SplitBarcodeBin
+    SplitBarcodeBin -->|顺序| GetFQlist
+    GetFQlist -->|顺序| BcNumCountPE
+    SplitBarcodeBin -.->|依赖| BcNumCountSE
+    BcNumCountSE -->|顺序| BarcodeMappingAndStar
+    BarcodeMappingAndStar -.->|依赖| GetExpSE
+    BarcodeMappingAndStar -.->|依赖| GetExpPE
+    BarcodeMappingAndStar -.->|依赖| MergeBarcodeReadsCount
+    MergeBarcodeReadsCount -->|顺序| Register_vea
+    Register_vea -.->|依赖| TissueCut_vea
+    MergeBarcodeReadsCount -.->|依赖| TissueCut_vea
+    TissueCut_vea -->|顺序| ReadsUnmappedRmHost
+    TissueCut_vea -.->|依赖| MicrobiomeAnalysis
+    TissueCut_vea -.->|依赖| SpatialCluster
+    Register_vea -.->|依赖| CellCut
+    CellCut -.->|依赖| CellCluster
+    TissueCut_vea -.->|依赖| Saturation
+    CellCut -.->|依赖| Report_v2
+    Register_vea -.->|依赖| Report_v2
+    SpatialCluster -.->|依赖| Report_v2
+    Saturation -.->|依赖| Report_v2
+    CellCluster -.->|依赖| Report_v2
+    TissueCut_vea -.->|依赖| Report_v2

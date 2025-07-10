@@ -179,3 +179,5 @@ logs/
 
 .vscode
 .cursor
+
+docs/wdl/*

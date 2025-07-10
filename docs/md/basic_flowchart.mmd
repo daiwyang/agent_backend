@@ -1,0 +1,42 @@
+graph TD
+    RefRead[RefRead<br/>RefRead]
+    SplitBarcodeBin{SplitBarcodeBin<br/>SplitBarcodeBin<br/>条件: !whetherPE}
+    GetFQlist[GetFQlist<br/>GetFQlist]
+    BcNumCountPE{BcNumCountPE<br/>BcNumCountPE<br/>条件: whetherPE}
+    BcNumCountSE{BcNumCountSE<br/>BcNumCountSE<br/>条件: !whetherPE}
+    BarcodeMappingAndStar[/BarcodeMappingAndStar<br/>BarcodeMappingAndStar_v2<br/>scatter: index/]
+    GetExpSE{GetExpSE<br/>GetExp<br/>条件: !whetherPE}
+    GetExpPE{GetExpPE<br/>GetExp<br/>条件: whetherPE}
+    MergeBarcodeReadsCount[MergeBarcodeReadsCount<br/>MergeBarcodeReadsCount]
+    Register_vea[Register_vea<br/>Register_vea]
+    TissueCut_vea[TissueCut_vea<br/>TissueCut_vea]
+    ReadsUnmappedRmHost[/ReadsUnmappedRmHost<br/>ReadsUnmappedRmHost<br/>scatter: index/]
+    MicrobiomeAnalysis{MicrobiomeAnalysis<br/>MicrobiomeAnalysis<br/>条件: Micro == 1}
+    SpatialCluster[SpatialCluster<br/>SpatialCluster]
+    CellCut{CellCut<br/>CellCut<br/>条件: DoCellbin}
+    CellCluster{CellCluster<br/>CellCluster<br/>条件: DoCellbin}
+    Saturation[Saturation<br/>Saturation]
+    Report_v2[Report_v2<br/>Report_v2]
+    RefRead --> SplitBarcodeBin
+    SplitBarcodeBin --> GetFQlist
+    GetFQlist --> BcNumCountPE
+    SplitBarcodeBin --> BcNumCountSE
+    BcNumCountSE --> BarcodeMappingAndStar
+    BarcodeMappingAndStar --> GetExpSE
+    BarcodeMappingAndStar --> GetExpPE
+    BarcodeMappingAndStar --> MergeBarcodeReadsCount
+    MergeBarcodeReadsCount --> Register_vea
+    Register_vea --> TissueCut_vea
+    MergeBarcodeReadsCount --> TissueCut_vea
+    TissueCut_vea --> ReadsUnmappedRmHost
+    TissueCut_vea --> MicrobiomeAnalysis
+    TissueCut_vea --> SpatialCluster
+    Register_vea --> CellCut
+    CellCut --> CellCluster
+    TissueCut_vea --> Saturation
+    CellCut --> Report_v2
+    Register_vea --> Report_v2
+    SpatialCluster --> Report_v2
+    Saturation --> Report_v2
+    CellCluster --> Report_v2
+    TissueCut_vea --> Report_v2

@@ -1,0 +1,65 @@
+graph TD
+    %% 样式定义
+    classDef workflowNode fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef conditionalNode fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    classDef scatterNode fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    classDef finalNode fill:#c8e6c9,stroke:#2e7d32,stroke-width:3px
+    
+    %% 数据预处理阶段
+    A[RefRead<br/>参考基因组读取]
+    B{SplitBarcodeBin<br/>条码分箱<br/>条件: !whetherPE}
+    C[GetFQlist<br/>获取文件列表]
+    D{BcNumCountPE<br/>PE条码计数<br/>条件: whetherPE}
+    E{BcNumCountSE<br/>SE条码计数<br/>条件: !whetherPE}
+    
+    %% 核心分析阶段
+    F[/BarcodeMappingAndStar<br/>条码映射和比对<br/>scatter并行/]
+    G{GetExpSE<br/>SE表达量计算<br/>条件: !whetherPE}
+    H{GetExpPE<br/>PE表达量计算<br/>条件: whetherPE}
+    I[MergeBarcodeReadsCount<br/>合并条码读数]
+    
+    %% 空间分析阶段
+    J[Register_vea<br/>空间配准]
+    K[TissueCut_vea<br/>组织切割]
+    L[/ReadsUnmappedRmHost<br/>去宿主序列<br/>scatter并行/]
+    M{MicrobiomeAnalysis<br/>微生物分析<br/>条件: Micro == 1}
+    N[SpatialCluster<br/>空间聚类]
+    
+    %% 细胞分析阶段
+    O{CellCut<br/>细胞切割<br/>条件: DoCellbin}
+    P{CellCluster<br/>细胞聚类<br/>条件: DoCellbin}
+    
+    %% 质控和报告
+    Q[Saturation<br/>饱和度分析]
+    R[Report_v2<br/>最终报告]
+    
+    %% 连接关系
+    A --> B
+    B --> C
+    C --> D
+    B --> E
+    E --> F
+    F --> G
+    F --> H
+    F --> I
+    I --> J
+    I --> K
+    J --> K
+    K --> L
+    K --> M
+    K --> N
+    J --> O
+    O --> P
+    K --> Q
+    N --> R
+    O --> R
+    Q --> R
+    J --> R
+    K --> R
+    P --> R
+    
+    %% 应用样式
+    class A,B,C,D,E workflowNode
+    class F,L scatterNode
+    class G,H,M,O,P conditionalNode
+    class R finalNode 
