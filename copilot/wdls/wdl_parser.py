@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Set, Union
 
 import WDL
 from WDL.Expr import Base
-from WDL.Tree import Call, Conditional, Decl, Document, Gather, Scatter, Task, Workflow, WorkflowNode
+from WDL.Tree import Call, Conditional, Decl, Document, Gather, Scatter, Task, Workflow, WorkflowNode, DocImport
 
 
 class WDLParseError(Exception):
@@ -63,6 +63,7 @@ class SimpleWDLParser:
         summary = {
             "workflow": self._parse_workflow(self.doc.workflow),
             "tasks": self._parse_tasks(self.doc.tasks),
+            "import": self._parse_imports(self.doc.imports),
         }
 
         return summary
@@ -78,6 +79,65 @@ class SimpleWDLParser:
             "effective_wdl_version": workflow.effective_wdl_version,
         }
         return workflow_info
+
+    def _parse_imports(self, imports: List[DocImport]) -> List[Dict[str, Any]]:
+        """解析导入列表，提取所有导入的详细信息"""
+        parsed_imports = []
+
+        for doc_import in imports:
+            import_info = self._parse_import(doc_import)
+            parsed_imports.append(import_info)
+
+        return parsed_imports
+
+    def _parse_import(self, doc_import: DocImport) -> Dict[str, Any]:
+        """解析单个导入语句，提取导入的详细信息"""
+        import_info = {
+            "uri": doc_import.uri,  # 导入的文件路径
+            "namespace": doc_import.namespace,  # 导入的命名空间
+            "pos": str(doc_import.pos) if hasattr(doc_import, "pos") else None,  # 位置信息
+            "imported_tasks": [],  # 导入的任务列表
+            "imported_workflows": [],  # 导入的工作流列表
+        }
+
+        # 如果存在导入的文档对象，解析其中的任务和工作流
+        if hasattr(doc_import, "doc") and doc_import.doc is not None:
+            imported_doc = doc_import.doc
+
+            # 解析导入文档中的任务
+            if hasattr(imported_doc, "tasks") and imported_doc.tasks:
+                for task in imported_doc.tasks:
+                    import_info["imported_tasks"].append(
+                        {
+                            "name": task.name,
+                            "full_name": f"{doc_import.namespace}.{task.name}" if doc_import.namespace else task.name,
+                            "inputs": self._parse_decls(task.inputs),
+                            "outputs": self._parse_decls(task.outputs),
+                            "runtime": self._parse_runtime(task.runtime) if task.runtime else {},
+                            "parameter_meta": task.parameter_meta,
+                            "meta": task.meta,
+                        }
+                    )
+
+            # 解析导入文档中的工作流
+            if hasattr(imported_doc, "workflow") and imported_doc.workflow:
+                workflow = imported_doc.workflow
+                import_info["imported_workflows"].append(
+                    {
+                        "name": workflow.name,
+                        "full_name": f"{doc_import.namespace}.{workflow.name}" if doc_import.namespace else workflow.name,
+                        "inputs": self._parse_decls(workflow.inputs),
+                        "outputs": self._parse_decls(workflow.outputs),
+                        "parameter_meta": workflow.parameter_meta,
+                        "meta": workflow.meta,
+                    }
+                )
+
+            # 解析导入文档中的其他导入（嵌套导入）
+            if hasattr(imported_doc, "imports") and imported_doc.imports:
+                import_info["nested_imports"] = self._parse_imports(imported_doc.imports)
+
+        return import_info
 
     def _parse_workflow_nodes(self, nodes: List[WorkflowNode]) -> List[Dict[str, Any]]:
         parsed_nodes = []
@@ -120,7 +180,7 @@ class SimpleWDLParser:
                 {
                     "node_type": "scatter",
                     "variable": node.variable,
-                    "expression": self._parse_expression_value_simple(node.expr),
+                    "expression": self._parse_expression_value(node.expr),
                     "body": self._parse_workflow_nodes(node.body),
                     "gathers": {k: v.workflow_node_id for k, v in node.gathers.items()},
                 }
@@ -131,7 +191,7 @@ class SimpleWDLParser:
             base_info.update(
                 {
                     "node_type": "conditional",
-                    "condition": self._parse_expression_value_simple(node.expr),
+                    "condition": self._parse_expression_value(node.expr),
                     "body": self._parse_workflow_nodes(node.body),
                     "gathers": {k: v.workflow_node_id for k, v in node.gathers.items()},
                 }
@@ -230,14 +290,9 @@ class SimpleWDLParser:
         else:
             return f"complex_expression({expr_class.lower()})"
 
-    def _parse_expression_value_simple(self, expr: Base) -> Any:
-        """简化版本的表达式解析，保持向后兼容"""
-        result = self._parse_expression_value(expr)
-        return result.get("value")
-
     def _parse_runtime(self, runtime: Dict[str, Base]) -> Dict[str, Any]:
         """解析runtime表达式字典"""
-        return {key: self._parse_expression_value_simple(expr) for key, expr in runtime.items()}
+        return {key: self._parse_expression_value(expr) for key, expr in runtime.items()}
 
     def _parse_tasks(self, tasks: List[Task] | None) -> List[Dict[str, Any]]:
         if tasks is None:
@@ -259,10 +314,8 @@ class SimpleWDLParser:
 
 
 if __name__ == "__main__":
-    print("开始解析WDL文件...")
     # 使用简化的解析器
     parser = SimpleWDLParser("/data/agent_backend/docs/wdl/SAW-ST-6.1-alpha3-FFPE-early-access.wdl")
-    print("解析器创建成功")
 
     summary = parser.get_workflow_summary()
 
