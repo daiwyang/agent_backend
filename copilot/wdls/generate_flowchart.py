@@ -6,6 +6,8 @@ WDL工作流程图生成器
 
 import json
 import re
+import subprocess
+import os
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 
@@ -1245,14 +1247,121 @@ class WDLFlowchartGenerator:
 
         return lines
 
+    def convert_mmd_to_images(self, mmd_file: str, output_dir: str = ".", formats: List[str] = ["svg", "png"]) -> Dict[str, str]:
+        """
+        将MMD文件转换为SVG和PNG格式
+
+        Args:
+            mmd_file: MMD文件路径
+            output_dir: 输出目录
+            formats: 要转换的格式列表，支持 'svg', 'png', 'pdf'
+
+        Returns:
+            Dict[str, str]: 转换结果，格式为 {format: file_path}
+        """
+        results = {}
+
+        # 检查mermaid-cli是否已安装
+        if not self._check_mermaid_cli():
+            print("❌ mermaid-cli 未安装，正在尝试安装...")
+            if not self._install_mermaid_cli():
+                print("❌ 安装 mermaid-cli 失败，请手动安装:")
+                print("   npm install -g @mermaid-js/mermaid-cli")
+                return results
+
+        # 创建输出目录
+        os.makedirs(output_dir, exist_ok=True)
+
+        # 获取基础文件名
+        base_name = os.path.splitext(os.path.basename(mmd_file))[0]
+
+        # 转换为各种格式
+        for format_type in formats:
+            if format_type not in ["svg", "png", "pdf"]:
+                print(f"⚠️  不支持的格式: {format_type}")
+                continue
+
+            output_file = os.path.join(output_dir, f"{base_name}.{format_type}")
+
+            try:
+                # 使用mmdc命令转换
+                cmd = [
+                    "mmdc",
+                    "-i",
+                    mmd_file,
+                    "-o",
+                    output_file,
+                    "-t",
+                    "neutral",  # 使用中性主题
+                    "-b",
+                    "white",  # 白色背景
+                    "-w",
+                    "1920",  # 宽度
+                    "-H",
+                    "1080",  # 高度
+                ]
+
+                # 如果是PNG格式，设置额外参数
+                if format_type == "png":
+                    cmd.extend(["-s", "2"])  # 设置缩放比例
+
+                print(f"🔄 正在转换为 {format_type.upper()} 格式...")
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+
+                if result.returncode == 0:
+                    results[format_type] = output_file
+                    print(f"✅ {format_type.upper()} 转换成功: {output_file}")
+                else:
+                    print(f"❌ {format_type.upper()} 转换失败:")
+                    print(f"   错误信息: {result.stderr}")
+
+            except subprocess.TimeoutExpired:
+                print(f"❌ {format_type.upper()} 转换超时")
+            except Exception as e:
+                print(f"❌ {format_type.upper()} 转换出错: {e}")
+
+        return results
+
+    def _check_mermaid_cli(self) -> bool:
+        """检查mermaid-cli是否已安装"""
+        try:
+            result = subprocess.run(["mmdc", "--version"], capture_output=True, text=True, timeout=5)
+            return result.returncode == 0
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return False
+
+    def _install_mermaid_cli(self) -> bool:
+        """尝试安装mermaid-cli"""
+        try:
+            # 检查npm是否可用
+            npm_result = subprocess.run(["npm", "--version"], capture_output=True, text=True, timeout=5)
+            if npm_result.returncode != 0:
+                print("❌ npm 不可用，无法自动安装 mermaid-cli")
+                return False
+
+            # 安装mermaid-cli
+            print("📦 正在安装 @mermaid-js/mermaid-cli...")
+            install_result = subprocess.run(["npm", "install", "-g", "@mermaid-js/mermaid-cli"], capture_output=True, text=True, timeout=60)
+
+            if install_result.returncode == 0:
+                print("✅ mermaid-cli 安装成功")
+                return True
+            else:
+                print(f"❌ mermaid-cli 安装失败: {install_result.stderr}")
+                return False
+
+        except Exception as e:
+            print(f"❌ 安装过程出错: {e}")
+            return False
+
 
 def main():
     """主函数"""
-    json_file = "docs/wdl/SAW-ST-6.1-alpha3-FFPE-early-access.json"
+    json_file = "docs/wdl/SAW-ST-V8.json"
 
     try:
         # 使用现代化的flowchart语法和ELK布局引擎
-        generator = WDLFlowchartGenerator(json_file, graph_direction="TD", use_modern_syntax=True)
+        generator = WDLFlowchartGenerator(json_file, graph_direction="TD", use_modern_syntax=False)
         print("生成WDL工作流程图...")
 
         flowchart = generator.generate_flowchart()
@@ -1269,11 +1378,39 @@ def main():
         print(f"工作流节点: {len(generator.workflow_nodes)}")
         print(f"任务定义: {len(generator.tasks)}")
 
+        # 转换为图片格式
+        # print("\n🔄 转换为图片格式...")
+        # results = generator.convert_mmd_to_images(output_file, ".", ["svg", "png"])
+
+        # if results:
+        #     print("✅ 图片转换完成:")
+        #     for format_type, file_path in results.items():
+        #         print(f"   📄 {format_type.upper()}: {file_path}")
+        # else:
+        #     print("⚠️  图片转换失败或未完成")
+
     except Exception as e:
         print(f"生成流程图时发生错误: {e}")
         import traceback
 
         traceback.print_exc()
+
+
+def convert_mmd_file(mmd_file: str, output_dir: str = ".", formats: List[str] = ["svg", "png"]) -> Dict[str, str]:
+    """
+    独立的MMD文件转换函数，无需创建WDLFlowchartGenerator实例
+
+    Args:
+        mmd_file: MMD文件路径
+        output_dir: 输出目录
+        formats: 要转换的格式列表，支持 'svg', 'png', 'pdf'
+
+    Returns:
+        Dict[str, str]: 转换结果，格式为 {format: file_path}
+    """
+    # 创建一个临时的生成器实例来使用转换方法
+    temp_generator = WDLFlowchartGenerator.__new__(WDLFlowchartGenerator)
+    return temp_generator.convert_mmd_to_images(mmd_file, output_dir, formats)
 
 
 if __name__ == "__main__":
