@@ -1,0 +1,355 @@
+graph TD
+    %% 节点样式定义
+    classDef inputNode fill:#fff9c4,stroke:#f57f17,stroke-width:2px,stroke-dasharray: 5 3
+    classDef outputNode fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px
+    classDef callNode fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
+    classDef varNode fill:#f3e5f5,stroke:#7b1fa2,stroke-width:1px
+
+    input_sampleid["sampleid"]
+    class input_sampleid inputNode
+    input_FASTQ["FASTQ"]
+    class input_FASTQ inputNode
+    input_mask["mask"]
+    class input_mask inputNode
+    input_imageTAR["imageTAR"]
+    class input_imageTAR inputNode
+    input_imageIPR["imageIPR"]
+    class input_imageIPR inputNode
+    input_splitNum["splitNum"]
+    class input_splitNum inputNode
+    input_Tissue["Tissue"]
+    class input_Tissue inputNode
+    input_CIDStart["CIDStart"]
+    class input_CIDStart inputNode
+    input_CIDLength["CIDLength"]
+    class input_CIDLength inputNode
+    input_referenceIndex["referenceIndex"]
+    class input_referenceIndex inputNode
+    input_Micro["Micro"]
+    class input_Micro inputNode
+    input_hostref["hostref"]
+    class input_hostref inputNode
+    input_kraken_database["kraken_database"]
+    class input_kraken_database inputNode
+    var_SlideArea("SlideArea")
+    class var_SlideArea varNode
+    var_UMI_Start_Pos("UMI_Start_Pos")
+    class var_UMI_Start_Pos varNode
+    var_UMILength("UMILength")
+    class var_UMILength varNode
+    var_UMIRead("UMIRead")
+    class var_UMIRead varNode
+    var_ReadLength("ReadLength")
+    class var_ReadLength varNode
+    var_Cellbin("Cellbin")
+    class var_Cellbin varNode
+    var_RMrRNA("RMrRNA")
+    class var_RMrRNA varNode
+    var_jobn("jobn")
+    class var_jobn varNode
+    var_whetherPE("whetherPE")
+    class var_whetherPE varNode
+    var_DoCellbin("DoCellbin")
+    class var_DoCellbin varNode
+    var_dockerUrl("dockerUrl")
+    class var_dockerUrl varNode
+    var_indexid("indexid")
+    class var_indexid varNode
+    var_UMIon("UMIon")
+    class var_UMIon varNode
+    var_starRef("starRef")
+    class var_starRef varNode
+    var_DataLine1("DataLine1")
+    class var_DataLine1 varNode
+    var_SEfq("SEfq")
+    class var_SEfq varNode
+    var_SEn("SEn")
+    class var_SEn varNode
+    var_jobN("jobN")
+    class var_jobN varNode
+    var_refPath("refPath")
+    class var_refPath varNode
+    var_genomeFile("genomeFile")
+    class var_genomeFile varNode
+    var_genomeSize("genomeSize")
+    class var_genomeSize varNode
+    var_PEmem("PEmem")
+    class var_PEmem varNode
+    var_DataLine("DataLine")
+    class var_DataLine varNode
+    var_raw_fq1("raw_fq1")
+    class var_raw_fq1 varNode
+    var_raw_fq2("raw_fq2")
+    class var_raw_fq2 varNode
+    var_base("base")
+    class var_base varNode
+    var_slide("slide")
+    class var_slide varNode
+    var_fq2File("fq2File")
+    class var_fq2File varNode
+    var_fq2Size("fq2Size")
+    class var_fq2Size varNode
+    var_SEmem("SEmem")
+    class var_SEmem varNode
+    var_unmappedreads("unmappedreads")
+    class var_unmappedreads varNode
+    var_bcStarStat("bcStarStat")
+    class var_bcStarStat varNode
+    var_annoSummary("annoSummary")
+    class var_annoSummary varNode
+    var_starStat("starStat")
+    class var_starStat varNode
+    var_DataLine3("DataLine3")
+    class var_DataLine3 varNode
+    var_raw_fq1_2("raw_fq1_2")
+    class var_raw_fq1_2 varNode
+    var_raw_fq2_2("raw_fq2_2")
+    class var_raw_fq2_2 varNode
+    var_base2("base2")
+    class var_base2 varNode
+    var_slide2("slide2")
+    class var_slide2 varNode
+    var_readsunmapped("readsunmapped")
+    class var_readsunmapped varNode
+    var_unmappedreadsRmhost("unmappedreadsRmhost")
+    class var_unmappedreadsRmhost varNode
+    var_rmhostStat("rmhostStat")
+    class var_rmhostStat varNode
+    task_RefRead["RefRead"]
+    class task_RefRead callNode
+    task_SplitBarcodeBin["SplitBarcodeBin"]
+    class task_SplitBarcodeBin callNode
+    task_GetFQlist["GetFQlist"]
+    class task_GetFQlist callNode
+    task_BcNumCountPE["BcNumCountPE"]
+    class task_BcNumCountPE callNode
+    task_BcNumCountSE["BcNumCountSE"]
+    class task_BcNumCountSE callNode
+    task_BarcodeMappingAndStar["BarcodeMappingAnd...<br/>Task: BarcodeMappi..."]
+    class task_BarcodeMappingAndStar callNode
+    task_GetExpSE["GetExpSE<br/>Task: GetExp"]
+    class task_GetExpSE callNode
+    task_GetExpPE["GetExpPE<br/>Task: GetExp"]
+    class task_GetExpPE callNode
+    task_MergeBarcodeReadsCount["MergeBarcodeReads..."]
+    class task_MergeBarcodeReadsCount callNode
+    task_Register_vea["Register_vea"]
+    class task_Register_vea callNode
+    task_TissueCut_vea["TissueCut_vea"]
+    class task_TissueCut_vea callNode
+    task_ReadsUnmappedRmHost["ReadsUnmappedRmHost"]
+    class task_ReadsUnmappedRmHost callNode
+    task_MicrobiomeAnalysis["MicrobiomeAnalysis"]
+    class task_MicrobiomeAnalysis callNode
+    task_SpatialCluster["SpatialCluster"]
+    class task_SpatialCluster callNode
+    task_CellCut["CellCut"]
+    class task_CellCut callNode
+    task_CellCluster["CellCluster"]
+    class task_CellCluster callNode
+    task_Saturation["Saturation"]
+    class task_Saturation callNode
+    task_Report_v2["Report_v2"]
+    class task_Report_v2 callNode
+    output_out00["Output Group: out00 - 3 items"]
+    class output_out00 outputNode
+    output_out01["Output Group: out01 - 1 items"]
+    class output_out01 outputNode
+    output_out02["Output Group: out02 - 5 items"]
+    class output_out02 outputNode
+    output_out021["Output Group: out021 - 17 items"]
+    class output_out021 outputNode
+    output_out03["Output Group: out03 - 13 items"]
+    class output_out03 outputNode
+    output_out04["Output Group: out04 - 5 items"]
+    class output_out04 outputNode
+    output_out041["Output Group: out041 - 3 items"]
+    class output_out041 outputNode
+    output_out05["Output Group: out05 - 1 items"]
+    class output_out05 outputNode
+    output_out051["Output Group: out051 - 2 items"]
+    class output_out051 outputNode
+    output_out06["Output Group: out06 - 1 items"]
+    class output_out06 outputNode
+    output_out07["Output Group: out07 - 2 items"]
+    class output_out07 outputNode
+
+    input_FASTQ --> var_jobn
+    input_FASTQ --> var_whetherPE
+    var_Cellbin --> var_DoCellbin
+    input_referenceIndex --> var_indexid
+    var_UMI_Start_Pos --> var_UMIon
+    task_RefRead --> var_starRef
+    var_indexid --> var_starRef
+    input_FASTQ --> var_DataLine1
+    var_DataLine1 --> var_SEfq
+    task_GetFQlist --> var_SEn
+    var_SEn --> var_jobN
+    var_whetherPE --> var_jobN
+    input_FASTQ --> var_jobN
+    var_starRef --> var_refPath
+    var_refPath --> var_genomeFile
+    var_genomeFile --> var_genomeSize
+    task_BcNumCountPE --> var_PEmem
+    input_FASTQ --> var_DataLine
+    var_whetherPE --> var_raw_fq1
+    task_GetFQlist --> var_raw_fq1
+    var_DataLine --> var_raw_fq1
+    var_DataLine --> var_raw_fq2
+    var_whetherPE --> var_raw_fq2
+    var_raw_fq1 --> var_base
+    var_whetherPE --> var_slide
+    var_base --> var_slide
+    var_raw_fq2 --> var_fq2File
+    var_whetherPE --> var_fq2File
+    var_raw_fq1 --> var_fq2File
+    task_BcNumCountSE --> var_SEmem
+    task_BarcodeMappingAndStar --> var_unmappedreads
+    task_BarcodeMappingAndStar --> var_bcStarStat
+    task_GetExpPE --> var_annoSummary
+    var_whetherPE --> var_annoSummary
+    task_GetExpSE --> var_annoSummary
+    task_BarcodeMappingAndStar --> var_starStat
+    input_FASTQ --> var_DataLine3
+    var_whetherPE --> var_raw_fq1_2
+    task_GetFQlist --> var_raw_fq1_2
+    var_DataLine3 --> var_raw_fq1_2
+    var_DataLine3 --> var_raw_fq2_2
+    var_whetherPE --> var_raw_fq2_2
+    var_raw_fq1_2 --> var_base2
+    var_base2 --> var_slide2
+    var_whetherPE --> var_slide2
+    var_unmappedreads --> var_readsunmapped
+    task_ReadsUnmappedRmHost --> var_unmappedreadsRmhost
+    task_ReadsUnmappedRmHost --> var_rmhostStat
+    var_dockerUrl --> task_RefRead
+    input_sampleid --> task_RefRead
+    var_indexid --> task_RefRead
+    input_mask --> task_SplitBarcodeBin
+    input_sampleid --> task_SplitBarcodeBin
+    input_CIDLength --> task_SplitBarcodeBin
+    input_CIDStart --> task_SplitBarcodeBin
+    input_splitNum --> task_SplitBarcodeBin
+    var_dockerUrl --> task_SplitBarcodeBin
+    input_sampleid --> task_GetFQlist
+    var_SEfq --> task_GetFQlist
+    var_dockerUrl --> task_GetFQlist
+    input_mask --> task_BcNumCountPE
+    var_indexid --> task_BcNumCountPE
+    var_genomeSize --> task_BcNumCountPE
+    var_dockerUrl --> task_BcNumCountPE
+    var_raw_fq1 --> task_BcNumCountSE
+    task_SplitBarcodeBin --> task_BcNumCountSE
+    input_sampleid --> task_BcNumCountSE
+    var_indexid --> task_BcNumCountSE
+    var_genomeSize --> task_BcNumCountSE
+    var_dockerUrl --> task_BcNumCountSE
+    var_RMrRNA --> task_BarcodeMappingAndStar
+    input_Micro --> task_BarcodeMappingAndStar
+    input_sampleid --> task_BarcodeMappingAndStar
+    var_whetherPE --> task_BarcodeMappingAndStar
+    task_BcNumCountPE --> task_BarcodeMappingAndStar
+    task_BcNumCountSE --> task_BarcodeMappingAndStar
+    input_mask --> task_BarcodeMappingAndStar
+    var_raw_fq1 --> task_BarcodeMappingAndStar
+    var_raw_fq2 --> task_BarcodeMappingAndStar
+    var_slide --> task_BarcodeMappingAndStar
+    var_starRef --> task_BarcodeMappingAndStar
+    var_indexid --> task_BarcodeMappingAndStar
+    var_UMI_Start_Pos --> task_BarcodeMappingAndStar
+    var_UMILength --> task_BarcodeMappingAndStar
+    var_UMIRead --> task_BarcodeMappingAndStar
+    input_CIDStart --> task_BarcodeMappingAndStar
+    input_CIDLength --> task_BarcodeMappingAndStar
+    var_fq2Size --> task_BarcodeMappingAndStar
+    var_SEmem --> task_BarcodeMappingAndStar
+    var_PEmem --> task_BarcodeMappingAndStar
+    var_dockerUrl --> task_BarcodeMappingAndStar
+    task_BarcodeMappingAndStar --> task_GetExpSE
+    task_RefRead --> task_GetExpSE
+    var_indexid --> task_GetExpSE
+    input_sampleid --> task_GetExpSE
+    var_UMIon --> task_GetExpSE
+    var_dockerUrl --> task_GetExpSE
+    task_BarcodeMappingAndStar --> task_GetExpPE
+    task_RefRead --> task_GetExpPE
+    var_indexid --> task_GetExpPE
+    input_sampleid --> task_GetExpPE
+    var_UMIon --> task_GetExpPE
+    var_dockerUrl --> task_GetExpPE
+    var_SlideArea --> task_MergeBarcodeReadsCount
+    task_BarcodeMappingAndStar --> task_MergeBarcodeReadsCount
+    input_sampleid --> task_MergeBarcodeReadsCount
+    input_mask --> task_MergeBarcodeReadsCount
+    var_dockerUrl --> task_MergeBarcodeReadsCount
+    var_SlideArea --> task_Register_vea
+    input_imageTAR --> task_Register_vea
+    input_sampleid --> task_Register_vea
+    input_imageIPR --> task_Register_vea
+    var_dockerUrl --> task_Register_vea
+    var_SlideArea --> task_TissueCut_vea
+    task_GetExpPE --> task_TissueCut_vea
+    task_GetExpSE --> task_TissueCut_vea
+    var_whetherPE --> task_TissueCut_vea
+    task_MergeBarcodeReadsCount --> task_TissueCut_vea
+    input_sampleid --> task_TissueCut_vea
+    task_Register_vea --> task_TissueCut_vea
+    var_dockerUrl --> task_TissueCut_vea
+    input_sampleid --> task_ReadsUnmappedRmHost
+    var_slide2 --> task_ReadsUnmappedRmHost
+    var_dockerUrl --> task_ReadsUnmappedRmHost
+    input_hostref --> task_ReadsUnmappedRmHost
+    var_readsunmapped --> task_ReadsUnmappedRmHost
+    input_sampleid --> task_MicrobiomeAnalysis
+    var_dockerUrl --> task_MicrobiomeAnalysis
+    input_hostref --> task_MicrobiomeAnalysis
+    input_kraken_database --> task_MicrobiomeAnalysis
+    var_unmappedreadsRmhost --> task_MicrobiomeAnalysis
+    var_rmhostStat --> task_MicrobiomeAnalysis
+    task_TissueCut_vea --> task_MicrobiomeAnalysis
+    task_TissueCut_vea --> task_SpatialCluster
+    input_sampleid --> task_SpatialCluster
+    var_dockerUrl --> task_SpatialCluster
+    task_GetExpPE --> task_CellCut
+    task_GetExpSE --> task_CellCut
+    var_whetherPE --> task_CellCut
+    input_sampleid --> task_CellCut
+    task_Register_vea --> task_CellCut
+    var_dockerUrl --> task_CellCut
+    input_sampleid --> task_CellCluster
+    task_CellCut --> task_CellCluster
+    var_dockerUrl --> task_CellCluster
+    task_GetExpSE --> task_Saturation
+    var_whetherPE --> task_Saturation
+    task_GetExpPE --> task_Saturation
+    task_TissueCut_vea --> task_Saturation
+    var_annoSummary --> task_Saturation
+    var_bcStarStat --> task_Saturation
+    var_dockerUrl --> task_Saturation
+    input_referenceIndex --> task_Report_v2
+    input_Tissue --> task_Report_v2
+    var_SlideArea --> task_Report_v2
+    task_Register_vea --> task_Report_v2
+    var_bcStarStat --> task_Report_v2
+    var_starStat --> task_Report_v2
+    var_annoSummary --> task_Report_v2
+    task_TissueCut_vea --> task_Report_v2
+    task_SpatialCluster --> task_Report_v2
+    task_Saturation --> task_Report_v2
+    input_sampleid --> task_Report_v2
+    task_CellCut --> task_Report_v2
+    task_CellCluster --> task_Report_v2
+    var_dockerUrl --> task_Report_v2
+    task_BarcodeMappingAndStar --> output_out00
+    task_MergeBarcodeReadsCount --> output_out01
+    task_GetExpPE --> output_out02
+    var_whetherPE --> output_out02
+    task_GetExpSE --> output_out02
+    task_MicrobiomeAnalysis --> output_out021
+    task_Register_vea --> output_out03
+    task_TissueCut_vea --> output_out04
+    task_CellCut --> output_out041
+    task_SpatialCluster --> output_out05
+    task_CellCluster --> output_out051
+    task_Saturation --> output_out06
+    task_Report_v2 --> output_out07

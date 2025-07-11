@@ -1,7 +1,6 @@
 import json
-import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any, Dict, List, Optional
 
 import WDL
 from WDL.Expr import Base
@@ -61,12 +60,72 @@ class SimpleWDLParser:
             return {}
 
         summary = {
+            "version": self._parse_version(self.doc),
             "workflow": self._parse_workflow(self.doc.workflow),
             "tasks": self._parse_tasks(self.doc.tasks),
-            "import": self._parse_imports(self.doc.imports),
+            "imports": self._parse_imports(self.doc.imports),
+            "structs": self._parse_structs(self.doc),
+            "global_variables": self._parse_global_variables(self.doc),
         }
 
         return summary
+
+    def _parse_version(self, doc: Document) -> Dict[str, Any]:
+        """解析WDL版本信息"""
+        return {
+            "version": doc.effective_wdl_version,
+            "source_location": str(doc.pos) if hasattr(doc, "pos") else None,
+        }
+
+    def _parse_structs(self, doc: Document) -> List[Dict[str, Any]]:
+        """解析结构体定义 - 使用miniwdl内置的解析结果"""
+        structs = []
+
+        # 使用miniwdl的内置方法获取结构体定义
+        if hasattr(doc, "struct_typedefs") and doc.struct_typedefs:
+            # 直接访问结构体定义
+            struct_defs = doc.struct_typedefs
+
+            # 使用 miniwdl 的字符串表示来获取结构体信息
+            struct_info = {
+                "name": "parsed_structs",
+                "raw_content": str(struct_defs),
+                "type": type(struct_defs).__name__,
+                "available_methods": [method for method in dir(struct_defs) if not method.startswith("_")],
+            }
+            structs.append(struct_info)
+
+        return structs
+
+    def _parse_global_variables(self, doc: Document) -> List[Dict[str, Any]]:
+        """解析全局变量定义 - 使用miniwdl内置的解析结果"""
+        global_vars = []
+
+        # 使用miniwdl的内置方法获取全局变量定义
+        # 检查文档的可用属性
+        doc_attrs = [attr for attr in dir(doc) if not attr.startswith("_")]
+
+        # 查找可能的全局变量相关属性
+        global_related_attrs = [attr for attr in doc_attrs if "env" in attr.lower() or "global" in attr.lower()]
+
+        if global_related_attrs:
+            env_info = {
+                "name": "document_globals",
+                "type": type(doc).__name__,
+                # "available_attrs": doc_attrs,
+                "global_related_attrs": global_related_attrs,
+            }
+            global_vars.append(env_info)
+
+        # 检查是否有顶层声明
+        if hasattr(doc, "workflow") and doc.workflow and hasattr(doc.workflow, "inputs"):
+            # 工作流输入可以视为全局可访问的变量
+            for input_decl in doc.workflow.inputs or []:
+                var_info = self._parse_decl(input_decl)
+                var_info["scope"] = "workflow_input"
+                global_vars.append(var_info)
+
+        return global_vars
 
     def _parse_workflow(self, workflow: Workflow) -> Dict[str, Any]:
         workflow_info = {
@@ -238,31 +297,55 @@ class SimpleWDLParser:
         return [self._parse_decl(decl) for decl in decls]
 
     def _parse_expression_value(self, expr: Base) -> Dict[str, Any]:
-        # 获取表达式类名
+        """解析表达式值 - 使用miniwdl内置的解析能力"""
+        # 获取表达式基本信息
         expr_class = type(expr).__name__
         raw_expr = str(expr)
 
-        # 1. 检查是否为字面量（使用miniwdl的内置literal属性）
-        literal_value = expr.literal
-        if literal_value is not None:
-            # 这是一个字面量表达式
-            actual_value = literal_value.value if hasattr(literal_value, "value") else str(literal_value)
-            return {"type": "literal", "value": actual_value, "raw_expression": raw_expr, "expression_class": expr_class, "is_literal": True}
+        # 使用miniwdl的内置解析能力
+        expr_info = {
+            "type": "expression",
+            "expression_class": expr_class,
+            "raw_expression": raw_expr,
+            "is_literal": False,
+            "value": None,
+        }
 
-        # 2. 检查是否为标识符（使用miniwdl的内置类型）
+        # 1. 使用miniwdl的literal属性检查字面量
+        if hasattr(expr, "literal") and expr.literal is not None:
+            literal_value = expr.literal
+            actual_value = literal_value.value if hasattr(literal_value, "value") else str(literal_value)
+            expr_info.update({"type": "literal", "value": actual_value, "is_literal": True, "literal_type": type(literal_value).__name__})
+            return expr_info
+
+        # 2. 使用miniwdl的类型信息和内置属性
+        if hasattr(expr, "type") and expr.type:
+            expr_info["data_type"] = str(expr.type)
+
+        # 3. 处理不同类型的表达式（使用miniwdl的类型系统）
         if expr_class in ["Ident", "Get"]:
             # 标识符或成员访问
             identifier_name = self._extract_identifier_name_from_expr(expr)
-            return {"type": "identifier", "value": identifier_name, "raw_expression": raw_expr, "expression_class": expr_class, "is_literal": False}
+            expr_info.update({"type": "identifier", "value": identifier_name, "identifier_type": expr_class})
+        elif hasattr(expr, "function_name"):
+            # 函数调用
+            function_name = getattr(expr, "function_name", "unknown")
+            expr_info.update({"type": "function_call", "value": function_name, "function_name": function_name})
+        elif hasattr(expr, "value"):
+            # 直接值访问
+            value = getattr(expr, "value", None)
+            expr_info.update({"type": "direct_value", "value": value})
+        else:
+            # 复杂表达式 - 使用miniwdl的字符串表示
+            expr_info.update(
+                {
+                    "type": "complex",
+                    "value": self._describe_complex_expression(expr),
+                    # "available_attrs": [attr for attr in dir(expr) if not attr.startswith("_")],
+                }
+            )
 
-        # 3. 复杂表达式
-        return {
-            "type": "complex",
-            "value": self._describe_complex_expression(expr),
-            "raw_expression": raw_expr,
-            "expression_class": expr_class,
-            "is_literal": False,
-        }
+        return expr_info
 
     def _extract_identifier_name_from_expr(self, expr: Base) -> str:
         """从表达式中提取标识符名称"""
@@ -290,6 +373,35 @@ class SimpleWDLParser:
         else:
             return f"complex_expression({expr_class.lower()})"
 
+    def _parse_command(self, command) -> Dict[str, Any]:
+        """解析任务命令，提取命令模板和变量信息"""
+        if not command:
+            return {"raw_command": None, "has_placeholders": False, "placeholders": []}
+
+        command_str = str(command)
+        command_info = {
+            "raw_command": command_str,
+            "has_placeholders": False,
+            "placeholders": [],
+            "command_parts": [],
+        }
+
+        # 检查是否包含占位符（WDL使用${variable}格式）
+        import re
+
+        placeholder_pattern = r"\$\{([^}]+)\}"
+        placeholders = re.findall(placeholder_pattern, command_str)
+
+        if placeholders:
+            command_info["has_placeholders"] = True
+            command_info["placeholders"] = placeholders
+
+            # 分割命令为静态部分和动态部分
+            parts = re.split(placeholder_pattern, command_str)
+            command_info["command_parts"] = parts
+
+        return command_info
+
     def _parse_runtime(self, runtime: Dict[str, Base]) -> Dict[str, Any]:
         """解析runtime表达式字典"""
         return {key: self._parse_expression_value(expr) for key, expr in runtime.items()}
@@ -306,10 +418,11 @@ class SimpleWDLParser:
             "inputs": self._parse_decls(task.inputs),
             "postinputs": self._parse_decls(task.postinputs),
             "outputs": self._parse_decls(task.outputs),
-            "command": str(task.command) if task.command else None,
+            "command": self._parse_command(task.command),
             "runtime": self._parse_runtime(task.runtime),
             "parameter_meta": task.parameter_meta,
             "meta": task.meta,
+            "private_declarations": self._parse_decls(getattr(task, "private_declarations", [])),
         }
 
 

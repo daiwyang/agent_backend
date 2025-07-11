@@ -16,10 +16,10 @@ class WDLFlowchartGenerator:
         """初始化流程图生成器"""
         self.json_file = json_file
         self.data = self._load_json()
+        self.workflow_info = self._get_workflow_info()
         self.workflow_inputs = self._get_workflow_inputs()
         self.workflow_outputs = self._get_workflow_outputs()
-        self.variable_definitions = self._get_variable_definitions()
-        self.calls = self._get_calls()
+        self.workflow_nodes = self._get_workflow_nodes()
         self.tasks = self._get_tasks()
 
     def _load_json(self) -> Dict[str, Any]:
@@ -31,25 +31,59 @@ class WDLFlowchartGenerator:
             print(f"加载JSON文件失败: {e}")
             return {}
 
+    def _get_workflow_info(self) -> Dict[str, Any]:
+        """获取工作流信息"""
+        return self.data.get("workflow", {})
+
     def _get_workflow_inputs(self) -> List[Dict[str, Any]]:
         """获取工作流输入参数"""
-        return self.data.get("inputs", [])
+        return self.workflow_info.get("inputs", [])
 
     def _get_workflow_outputs(self) -> List[Dict[str, Any]]:
         """获取工作流输出参数"""
-        return self.data.get("outputs", [])
+        return self.workflow_info.get("outputs", [])
 
-    def _get_variable_definitions(self) -> Dict[str, Dict[str, Any]]:
-        """获取变量定义"""
-        return self.data.get("variable_definitions", {})
-
-    def _get_calls(self) -> List[Dict[str, Any]]:
-        """获取任务调用"""
-        return self.data.get("calls", [])
+    def _get_workflow_nodes(self) -> List[Dict[str, Any]]:
+        """获取工作流节点"""
+        return self.workflow_info.get("body", [])
 
     def _get_tasks(self) -> List[Dict[str, Any]]:
         """获取任务定义"""
         return self.data.get("tasks", [])
+
+    def _get_call_nodes(self) -> List[Dict[str, Any]]:
+        """获取任务调用节点（包括嵌套在conditional和scatter中的）"""
+        call_nodes = []
+
+        def extract_calls_from_nodes(nodes):
+            """递归提取节点中的call节点"""
+            for node in nodes:
+                if node.get("node_type") == "call":
+                    call_nodes.append(node)
+                elif node.get("node_type") in ["conditional", "scatter"]:
+                    # 递归处理嵌套的body节点
+                    body_nodes = node.get("body", [])
+                    extract_calls_from_nodes(body_nodes)
+
+        extract_calls_from_nodes(self.workflow_nodes)
+        return call_nodes
+
+    def _get_variable_definitions(self) -> List[Dict[str, Any]]:
+        """获取变量定义节点（包括嵌套在conditional和scatter中的）"""
+        var_nodes = []
+
+        def extract_vars_from_nodes(nodes):
+            """递归提取节点中的变量定义"""
+            for node in nodes:
+                if node.get("node_type") == "declaration":
+                    var_nodes.append(node)
+                elif node.get("node_type") in ["conditional", "scatter"]:
+                    # 递归处理嵌套的body节点
+                    body_nodes = node.get("body", [])
+                    extract_vars_from_nodes(body_nodes)
+
+        extract_vars_from_nodes(self.workflow_nodes)
+        return var_nodes
 
     def _sanitize_node_id(self, node_id: str) -> str:
         """清理节点ID，确保Mermaid兼容"""
@@ -85,15 +119,6 @@ class WDLFlowchartGenerator:
 
         return text_str
 
-    def _get_variable_type_color(self, var_type: str) -> str:
-        """根据变量类型获取颜色类"""
-        if not var_type:
-            return "defaultVar"
-
-        base_type = var_type.split("[")[0].lower()
-        type_colors = {"int": "intVar", "float": "floatVar", "string": "stringVar", "boolean": "boolVar", "array": "arrayVar", "file": "fileVar"}
-        return type_colors.get(base_type, "defaultVar")
-
     def _is_workflow_input(self, var_name: str) -> bool:
         """检查是否为工作流输入参数"""
         return any(inp.get("name") == var_name for inp in self.workflow_inputs)
@@ -105,14 +130,7 @@ class WDLFlowchartGenerator:
             "    classDef inputNode fill:#fff9c4,stroke:#f57f17,stroke-width:2px,stroke-dasharray: 5 3",
             "    classDef outputNode fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px",
             "    classDef callNode fill:#e3f2fd,stroke:#1976d2,stroke-width:2px",
-            "    classDef conditionNode fill:#fff8e1,stroke:#ff8f00,stroke-width:2px",
-            "    classDef intVar fill:#e8f5e8,stroke:#388e3c,stroke-width:1px",
-            "    classDef floatVar fill:#e8f5e8,stroke:#388e3c,stroke-width:1px",
-            "    classDef stringVar fill:#e1f5fe,stroke:#0277bd,stroke-width:1px",
-            "    classDef boolVar fill:#fff3e0,stroke:#ef6c00,stroke-width:1px",
-            "    classDef arrayVar fill:#f3e5f5,stroke:#7b1fa2,stroke-width:1px",
-            "    classDef fileVar fill:#fce4ec,stroke:#c2185b,stroke-width:1px",
-            "    classDef defaultVar fill:#f5f5f5,stroke:#616161,stroke-width:1px",
+            "    classDef varNode fill:#f3e5f5,stroke:#7b1fa2,stroke-width:1px",
         ]
 
     def _create_input_nodes(self) -> Tuple[List[str], Set[str]]:
@@ -122,8 +140,6 @@ class WDLFlowchartGenerator:
 
         for input_param in self.workflow_inputs:
             input_name = input_param.get("name")
-            optional = input_param.get("optional", False)
-
             if not input_name:
                 continue
 
@@ -131,7 +147,7 @@ class WDLFlowchartGenerator:
             sanitized_id = self._sanitize_node_id(node_id)
             display_name = self._sanitize_text(input_name, 20)
 
-            nodes.append(f"    {sanitized_id}[{display_name}]")
+            nodes.append(f'    {sanitized_id}["{display_name}"]')
             nodes.append(f"    class {sanitized_id} inputNode")
             node_ids.add(sanitized_id)
 
@@ -142,46 +158,37 @@ class WDLFlowchartGenerator:
         nodes = []
         node_ids = set()
 
-        # 如果输出节点超过3个，则按模式分组合并
-        if len(self.workflow_outputs) > 3:
+        # 如果输出节点超过5个，则按模式分组合并
+        if len(self.workflow_outputs) > 5:
             # 按输出名称的前缀进行分组
             output_groups = {}
-            
+
             for output in self.workflow_outputs:
                 output_name = output.get("name", "")
                 if not output_name:
                     continue
-                
-                # 提取前缀（如 out00_, out01_, out02_ 等）
-                prefix = ""
+
+                # 提取前缀
+                prefix = "outputs"
                 if "_" in output_name:
-                    prefix = output_name.split("_")[0] + "_"
-                else:
-                    prefix = output_name[:3] + "_"  # 取前3个字符作为前缀
-                
+                    prefix = output_name.split("_")[0]
+
                 if prefix not in output_groups:
                     output_groups[prefix] = []
                 output_groups[prefix].append(output)
-            
-            # 为每个分组创建输出节点
+
+                # 为每个分组创建输出节点
             for prefix, outputs in output_groups.items():
-                group_id = f"output_{prefix.rstrip('_')}"
+                group_id = f"output_{prefix}"
                 sanitized_id = self._sanitize_node_id(group_id)
-                
-                # 显示该分组的主要输出类型
-                output_names = [output.get("name", "") for output in outputs]
-                display_names = [self._sanitize_text(name, 12) for name in output_names[:3]]  # 只显示前3个
-                if len(output_names) > 3:
-                    display_names.append(f"...等{len(output_names)}个")
-                
-                nodes.append(f"    {sanitized_id}[输出: {', '.join(display_names)}]")
+
+                nodes.append(f'    {sanitized_id}["Output Group: {prefix} - {len(outputs)} items"]')
                 nodes.append(f"    class {sanitized_id} outputNode")
                 node_ids.add(sanitized_id)
         else:
             # 正常创建每个输出节点
             for output_param in self.workflow_outputs:
                 output_name = output_param.get("name")
-
                 if not output_name:
                     continue
 
@@ -189,30 +196,9 @@ class WDLFlowchartGenerator:
                 sanitized_id = self._sanitize_node_id(node_id)
                 display_name = self._sanitize_text(output_name, 20)
 
-                nodes.append(f"    {sanitized_id}[输出: {display_name}]")
+                nodes.append(f'    {sanitized_id}["{display_name}"]')
                 nodes.append(f"    class {sanitized_id} outputNode")
                 node_ids.add(sanitized_id)
-
-        return nodes, node_ids
-
-    def _create_variable_nodes(self) -> Tuple[List[str], Set[str]]:
-        """创建变量节点"""
-        nodes = []
-        node_ids = set()
-
-        for var_name, var_def in self.variable_definitions.items():
-            var_type = var_def.get("type", "")
-
-            node_id = f"var_{var_name}"
-            sanitized_id = self._sanitize_node_id(node_id)
-            display_name = self._sanitize_text(var_name, 20)
-
-            color_class = self._get_variable_type_color(var_type)
-
-            # 只显示变量名，不显示复杂的表达式
-            nodes.append(f"    {sanitized_id}(({display_name}))")
-            nodes.append(f"    class {sanitized_id} {color_class}")
-            node_ids.add(sanitized_id)
 
         return nodes, node_ids
 
@@ -221,9 +207,10 @@ class WDLFlowchartGenerator:
         nodes = []
         node_ids = set()
 
-        for call in self.calls:
-            call_name = call.get("name")
-            task_name = call.get("task")
+        call_nodes = self._get_call_nodes()
+        for call in call_nodes:
+            call_name = call.get("call_name")
+            task_name = call.get("callee_task")
 
             if not call_name:
                 continue
@@ -234,263 +221,248 @@ class WDLFlowchartGenerator:
 
             if task_name and task_name != call_name:
                 display_task = self._sanitize_text(task_name, 15)
-                nodes.append(f"    {sanitized_id}[{display_name}<br/>任务: {display_task}]")
+                nodes.append(f'    {sanitized_id}["{display_name}<br/>Task: {display_task}"]')
             else:
-                nodes.append(f"    {sanitized_id}[{display_name}]")
+                nodes.append(f'    {sanitized_id}["{display_name}"]')
 
             nodes.append(f"    class {sanitized_id} callNode")
             node_ids.add(sanitized_id)
 
         return nodes, node_ids
 
-    def _create_condition_nodes(self) -> Tuple[List[str], Set[str]]:
-        """创建条件节点"""
+    def _create_variable_nodes(self) -> Tuple[List[str], Set[str]]:
+        """创建变量节点"""
         nodes = []
         node_ids = set()
 
-        for call in self.calls:
-            context = call.get("context", {})
-            
-            if context.get("type") == "conditional" and context.get("condition"):
-                condition_id = context.get("id", f"condition_{len(node_ids)}")
-                
-                node_id = f"condition_{condition_id}"
-                sanitized_id = self._sanitize_node_id(node_id)
-                
-                # 只显示条件ID，不显示表达式
-                nodes.append(f"    {sanitized_id}{{{condition_id}}}")
-                nodes.append(f"    class {sanitized_id} conditionNode")
-                node_ids.add(sanitized_id)
+        variable_definitions = self._get_variable_definitions()
+        for var_def in variable_definitions:
+            var_name = var_def.get("name")
+            if not var_name:
+                continue
+
+            node_id = f"var_{var_name}"
+            sanitized_id = self._sanitize_node_id(node_id)
+            display_name = self._sanitize_text(var_name, 20)
+
+            # 显示变量节点（使用圆角矩形）
+            nodes.append(f'    {sanitized_id}("{display_name}")')
+            nodes.append(f"    class {sanitized_id} varNode")
+            node_ids.add(sanitized_id)
 
         return nodes, node_ids
 
-    def _create_variable_dependency_edges(self, all_node_ids: Set[str], added_edges: Set[Tuple[str, str]]) -> List[str]:
-        """创建变量依赖边"""
-        edges = []
+    def _extract_expression_dependencies(self, expression: Dict[str, Any]) -> Set[str]:
+        """从表达式中提取依赖变量"""
+        dependencies = set()
 
-        for var_name, var_def in self.variable_definitions.items():
-            var_node_id = self._sanitize_node_id(f"var_{var_name}")
-            dependencies = var_def.get("dependencies", [])
-            expression = var_def.get("expression", "")
+        if not expression:
+            return dependencies
 
-            # 处理显式依赖
-            for dep in dependencies:
-                # 检查是否为任务输出 (格式: task_name.output_name)
-                if "." in dep:
-                    task_name, output_name = dep.split(".", 1)
-                    dep_node_id = self._sanitize_node_id(f"task_{task_name}")
-                # 检查是否为输入参数
-                elif self._is_workflow_input(dep):
-                    dep_node_id = self._sanitize_node_id(f"input_{dep}")
-                else:
-                    dep_node_id = self._sanitize_node_id(f"var_{dep}")
+        # 处理不同类型的表达式
+        expr_type = expression.get("type", "")
 
-                if dep_node_id in all_node_ids and var_node_id in all_node_ids:
-                    edge = (dep_node_id, var_node_id)
-                    if edge not in added_edges:
-                        edges.append(f"    {dep_node_id} --> {var_node_id}")
-                        added_edges.add(edge)
+        if expr_type == "identifier":
+            # 直接变量引用
+            raw_expr = expression.get("raw_expression", "")
+            if raw_expr:
+                dependencies.add(raw_expr)
 
-            # 处理表达式中的隐式依赖
-            if expression:
-                expr_str = str(expression)
-                # 查找表达式中的变量名
-                for other_var_name in self.variable_definitions.keys():
-                    if other_var_name in expr_str and other_var_name != var_name:
-                        other_var_node_id = self._sanitize_node_id(f"var_{other_var_name}")
-                        if other_var_node_id in all_node_ids and var_node_id in all_node_ids:
-                            edge = (other_var_node_id, var_node_id)
-                            if edge not in added_edges:
-                                edges.append(f"    {other_var_node_id} --> {var_node_id}")
-                                added_edges.add(edge)
+        elif expr_type == "complex":
+            # 复杂表达式（如条件表达式）
+            raw_expr = expression.get("raw_expression", "")
+            if raw_expr:
+                # 更完善的变量提取，处理各种情况
+                dependencies.update(self._extract_variables_from_expression(raw_expr))
 
-        return edges
+        elif expr_type == "function_call":
+            # 函数调用表达式
+            raw_expr = expression.get("raw_expression", "")
+            if raw_expr:
+                dependencies.update(self._extract_variables_from_expression(raw_expr))
+
+        elif expr_type == "literal":
+            # 字面量，无依赖
+            pass
+
+        return dependencies
+
+    def _extract_variables_from_expression(self, raw_expr: str) -> Set[str]:
+        """从原始表达式字符串中提取变量名"""
+        variables = set()
+
+        # 1. 首先处理任务输出引用，如 TaskName.outputName（优先级最高）
+        task_output_pattern = r"\b([a-zA-Z_][a-zA-Z0-9_]*\.[a-zA-Z_][a-zA-Z0-9_]*)\b"
+        task_output_matches = re.findall(task_output_pattern, raw_expr)
+        variables.update(task_output_matches)
+
+        # 2. 处理数组访问，如 FASTQ[0], FASTQ[index]
+        array_pattern = r"\b([a-zA-Z_][a-zA-Z0-9_]*)\["
+        array_matches = re.findall(array_pattern, raw_expr)
+        variables.update(array_matches)
+
+        # 3. 处理函数调用，如 length(FASTQ), size(genomeFile,"GB")
+        function_pattern = r"\b[a-zA-Z_][a-zA-Z0-9_]*\(([^)]+)\)"
+        function_matches = re.findall(function_pattern, raw_expr)
+        for match in function_matches:
+            # 递归处理函数参数，但要去除引号内的字符串
+            clean_match = re.sub(r'"[^"]*"', "", match)  # 移除字符串字面量
+            inner_vars = self._extract_variables_from_expression(clean_match)
+            variables.update(inner_vars)
+
+        # 4. 创建已识别的模式，用于从通用变量提取中排除
+        recognized_patterns = set()
+        for task_output in task_output_matches:
+            # 将TaskName.outputName拆分为TaskName和outputName，避免重复提取
+            task_name, output_name = task_output.split(".", 1)
+            recognized_patterns.add(task_name)
+            recognized_patterns.add(output_name)
+
+        # 5. 处理一般的变量名，但排除已识别的模式和关键字
+        var_pattern = r"\b[a-zA-Z_][a-zA-Z0-9_]*\b"
+        all_vars = re.findall(var_pattern, raw_expr)
+        for var in all_vars:
+            # 排除关键字、函数名和已识别的模式片段
+            if var not in ["if", "then", "else", "true", "false", "length", "size", "range"] and var not in recognized_patterns:
+                variables.add(var)
+
+        return variables
+
+    def _resolve_dependency_node(self, dep: str, all_node_ids: Set[str]) -> Optional[str]:
+        """解析依赖关系并返回对应的节点ID"""
+        # 1. 检查是否为工作流输入参数
+        if self._is_workflow_input(dep):
+            src_node_id = self._sanitize_node_id(f"input_{dep}")
+            if src_node_id in all_node_ids:
+                return src_node_id
+
+        # 2. 检查是否为任务调用（task.output格式）
+        if "." in dep:
+            task_name = dep.split(".")[0]
+            src_node_id = self._sanitize_node_id(f"task_{task_name}")
+            if src_node_id in all_node_ids:
+                return src_node_id
+
+        # 3. 检查是否为变量
+        src_node_id = self._sanitize_node_id(f"var_{dep}")
+        if src_node_id in all_node_ids:
+            return src_node_id
+
+        return None
 
     def _create_task_input_edges(self, all_node_ids: Set[str], added_edges: Set[Tuple[str, str]]) -> List[str]:
         """创建任务输入边"""
         edges = []
 
-        for call in self.calls:
-            call_name = call.get("name")
+        call_nodes = self._get_call_nodes()
+        for call in call_nodes:
+            call_name = call.get("call_name")
             task_inputs = call.get("inputs", {})
+
+            if not call_name:
+                continue
+
             task_node_id = self._sanitize_node_id(f"task_{call_name}")
 
             for input_name, input_value in task_inputs.items():
-                if isinstance(input_value, dict) and "name" in input_value:
-                    var_name = input_value["name"]
+                if isinstance(input_value, dict):
+                    # 从输入表达式中提取依赖
+                    dependencies = self._extract_expression_dependencies(input_value)
 
-                    # 检查是否为输入参数
-                    if self._is_workflow_input(var_name):
-                        src_node_id = self._sanitize_node_id(f"input_{var_name}")
-                    else:
-                        src_node_id = self._sanitize_node_id(f"var_{var_name}")
+                    for dep in dependencies:
+                        src_node_id = self._resolve_dependency_node(dep, all_node_ids)
 
-                    if src_node_id in all_node_ids and task_node_id in all_node_ids:
-                        edge = (src_node_id, task_node_id)
-                        if edge not in added_edges:
-                            edges.append(f"    {src_node_id} --> {task_node_id}")
-                            added_edges.add(edge)
+                        if src_node_id and task_node_id in all_node_ids:
+                            edge = (src_node_id, task_node_id)
+                            if edge not in added_edges:
+                                edges.append(f"    {src_node_id} --> {task_node_id}")
+                                added_edges.add(edge)
 
         return edges
 
     def _create_output_edges(self, all_node_ids: Set[str], added_edges: Set[Tuple[str, str]]) -> List[str]:
         """创建输出边"""
         edges = []
-        
+
         # 检查是否使用了分组的输出节点
-        grouped_output = len(self.workflow_outputs) > 3
-        
-        if grouped_output:
-            # 按前缀分组输出
-            output_groups = {}
-            for output in self.workflow_outputs:
-                output_name = output.get("name", "")
-                if not output_name:
-                    continue
-                
-                prefix = ""
-                if output_name and "_" in output_name:
-                    prefix = output_name.split("_")[0] + "_"
-                elif output_name:
-                    prefix = output_name[:3] + "_"
-                
-                if prefix not in output_groups:
-                    output_groups[prefix] = []
-                output_groups[prefix].append(output)
-        
+        grouped_output = len(self.workflow_outputs) > 5
+
         for output_param in self.workflow_outputs:
             output_name = output_param.get("name")
-            expression = output_param.get("expression", "")
-            
+            expression = output_param.get("expression")
+
+            if not output_name:
+                continue
+
             # 根据是否分组选择输出节点ID
             if grouped_output and output_name:
                 # 找到该输出属于哪个分组
-                prefix = ""
+                prefix = "outputs"
                 if "_" in output_name:
-                    prefix = output_name.split("_")[0] + "_"
-                else:
-                    prefix = output_name[:3] + "_"
-                
-                output_node_id = self._sanitize_node_id(f"output_{prefix.rstrip('_')}")
+                    prefix = output_name.split("_")[0]
+
+                output_node_id = self._sanitize_node_id(f"output_{prefix}")
             else:
                 output_node_id = self._sanitize_node_id(f"output_{output_name}")
 
-            # 查找表达式中的所有任务名
-            # 匹配模式：task_name.output_name 或 task_name['output_name']
-            task_patterns = [
-                r"([a-zA-Z_][a-zA-Z0-9_]*)\.[a-zA-Z_][a-zA-Z0-9_]*",  # task_name.output_name
-                r"([a-zA-Z_][a-zA-Z0-9_]*)\['[^']*'\]",  # task_name['output_name']
-                r"([a-zA-Z_][a-zA-Z0-9_]*)\[[^]]*\]",  # task_name[output_name]
-            ]
-            
-            found_tasks = set()
-            for pattern in task_patterns:
-                matches = re.findall(pattern, expression)
-                found_tasks.update(matches)
-            
-            # 为每个找到的任务创建边（使用实线）
-            for task_name in found_tasks:
-                src_node_id = self._sanitize_node_id(f"task_{task_name}")
-                
-                if src_node_id in all_node_ids and output_node_id in all_node_ids:
-                    edge = (src_node_id, output_node_id)
-                    if edge not in added_edges:
-                        edges.append(f"    {src_node_id} --> {output_node_id}")
-                        added_edges.add(edge)
-        
-        return edges
+            # 从输出表达式中提取依赖
+            if expression:
+                dependencies = self._extract_expression_dependencies(expression)
 
-    def _create_runtime_edges(self, all_node_ids: Set[str], added_edges: Set[Tuple[str, str]]) -> List[str]:
-        """创建Runtime变量边"""
-        edges = []
+                for dep in dependencies:
+                    src_node_id = self._resolve_dependency_node(dep, all_node_ids)
 
-        for call in self.calls:
-            call_name = call.get("name")
-            task_name = call.get("task")
-            task_node_id = self._sanitize_node_id(f"task_{call_name}")
-
-            # 查找对应的任务定义以获取runtime信息
-            if task_name:
-                for task in self.tasks:
-                    if task.get("name") == task_name:
-                        runtime = task.get("runtime", {})
-                        for key, value in runtime.items():
-                            if isinstance(value, dict) and "name" in value:
-                                var_name = value["name"]
-                                if self._is_workflow_input(var_name):
-                                    src_node_id = self._sanitize_node_id(f"input_{var_name}")
-                                else:
-                                    src_node_id = self._sanitize_node_id(f"var_{var_name}")
-
-                                if src_node_id in all_node_ids and task_node_id in all_node_ids:
-                                    edge = (src_node_id, task_node_id)
-                                    if edge not in added_edges:
-                                        edges.append(f"    {src_node_id} --> {task_node_id}")
-                                        added_edges.add(edge)
-                            elif isinstance(value, dict) and "variables" in value:
-                                variables = value.get("variables", [])
-                                for var_name in variables:
-                                    if self._is_workflow_input(var_name):
-                                        src_node_id = self._sanitize_node_id(f"input_{var_name}")
-                                    else:
-                                        src_node_id = self._sanitize_node_id(f"var_{var_name}")
-
-                                    if src_node_id in all_node_ids and task_node_id in all_node_ids:
-                                        edge = (src_node_id, task_node_id)
-                                        if edge not in added_edges:
-                                            edges.append(f"    {src_node_id} --> {task_node_id}")
-                                            added_edges.add(edge)
-                        break
+                    if src_node_id and output_node_id in all_node_ids:
+                        edge = (src_node_id, output_node_id)
+                        if edge not in added_edges:
+                            edges.append(f"    {src_node_id} --> {output_node_id}")
+                            added_edges.add(edge)
 
         return edges
 
-    def _create_condition_edges(self, all_node_ids: Set[str], added_edges: Set[Tuple[str, str]]) -> List[str]:
-        """创建条件节点边"""
+    def _build_variable_dependency_graph(self) -> Dict[str, Set[str]]:
+        """构建变量依赖图"""
+        var_deps = {}
+
+        variable_definitions = self._get_variable_definitions()
+        for var_def in variable_definitions:
+            var_name = var_def.get("name")
+            expression = var_def.get("expression")
+
+            if not var_name or not expression:
+                continue
+
+            dependencies = self._extract_expression_dependencies(expression)
+            var_deps[var_name] = dependencies
+
+        return var_deps
+
+    def _create_variable_dependency_edges(self, all_node_ids: Set[str], added_edges: Set[Tuple[str, str]]) -> List[str]:
+        """创建变量依赖边"""
         edges = []
-        
-        condition_count = 0
-        for call in self.calls:
-            call_name = call.get("name")
-            context = call.get("context", {})
-            
-            if context.get("type") == "conditional" and context.get("condition"):
-                condition_id = context.get("id", f"condition_{condition_count}")
-                condition_node_id = self._sanitize_node_id(f"condition_{condition_id}")
-                task_node_id = self._sanitize_node_id(f"task_{call_name}")
-                
-                # 条件节点连接到任务节点（使用虚线）
-                if condition_node_id in all_node_ids and task_node_id in all_node_ids:
-                    edge = (condition_node_id, task_node_id)
+
+        variable_definitions = self._get_variable_definitions()
+        for var_def in variable_definitions:
+            var_name = var_def.get("name")
+            expression = var_def.get("expression")
+
+            if not var_name or not expression:
+                continue
+
+            var_node_id = self._sanitize_node_id(f"var_{var_name}")
+
+            # 从表达式中提取依赖
+            dependencies = self._extract_expression_dependencies(expression)
+
+            for dep in dependencies:
+                src_node_id = self._resolve_dependency_node(dep, all_node_ids)
+
+                if src_node_id and var_node_id in all_node_ids:
+                    edge = (src_node_id, var_node_id)
                     if edge not in added_edges:
-                        edges.append(f"    {condition_node_id} -.-> {task_node_id}")
+                        edges.append(f"    {src_node_id} --> {var_node_id}")
                         added_edges.add(edge)
-                
-                # 查找条件中使用的变量，建立输入到条件的连接
-                condition = context.get("condition", "")
-                
-                # 检查输入参数
-                for input_param in self.workflow_inputs:
-                    input_name = input_param.get("name")
-                    if input_name and input_name in condition:
-                        input_node_id = self._sanitize_node_id(f"input_{input_name}")
-                        if input_node_id in all_node_ids and condition_node_id in all_node_ids:
-                            edge = (input_node_id, condition_node_id)
-                            if edge not in added_edges:
-                                edges.append(f"    {input_node_id} --> {condition_node_id}")
-                                added_edges.add(edge)
-                
-                # 检查变量定义
-                for var_name in self.variable_definitions.keys():
-                    if var_name and var_name in condition:
-                        var_node_id = self._sanitize_node_id(f"var_{var_name}")
-                        if var_node_id in all_node_ids and condition_node_id in all_node_ids:
-                            edge = (var_node_id, condition_node_id)
-                            if edge not in added_edges:
-                                edges.append(f"    {var_node_id} --> {condition_node_id}")
-                                added_edges.add(edge)
-                
-                condition_count += 1
-        
+
         return edges
 
     def _create_edges(self, all_node_ids: Set[str]) -> List[str]:
@@ -506,12 +478,6 @@ class WDLFlowchartGenerator:
 
         # 3. 输出边
         edges.extend(self._create_output_edges(all_node_ids, added_edges))
-
-        # 4. Runtime变量边
-        edges.extend(self._create_runtime_edges(all_node_ids, added_edges))
-
-        # 5. 条件节点边
-        edges.extend(self._create_condition_edges(all_node_ids, added_edges))
 
         return edges
 
@@ -544,11 +510,6 @@ class WDLFlowchartGenerator:
         mermaid_lines.extend(task_nodes)
         all_node_ids.update(task_ids)
 
-        # 条件节点
-        condition_nodes, condition_ids = self._create_condition_nodes()
-        mermaid_lines.extend(condition_nodes)
-        all_node_ids.update(condition_ids)
-
         # 输出节点
         output_nodes, output_ids = self._create_output_nodes()
         mermaid_lines.extend(output_nodes)
@@ -567,22 +528,29 @@ def main():
     """主函数"""
     json_file = "docs/wdl/SAW-ST-6.1-alpha3-FFPE-early-access.json"
 
-    generator = WDLFlowchartGenerator(json_file)
-    print("生成WDL工作流程图...")
+    try:
+        generator = WDLFlowchartGenerator(json_file)
+        print("生成WDL工作流程图...")
 
-    flowchart = generator.generate_flowchart()
+        flowchart = generator.generate_flowchart()
 
-    # 保存到文件
-    output_file = "wdl_workflow_flowchart.mmd"
-    with open(output_file, "w", encoding="utf-8") as f:
-        f.write(flowchart)
+        # 保存到文件
+        output_file = "wdl_workflow_flowchart.mmd"
+        with open(output_file, "w", encoding="utf-8") as f:
+            f.write(flowchart)
 
-    print(f"流程图已生成: {output_file}")
-    print(f"工作流名称: {generator.data.get('name', 'Unknown')}")
-    print(f"输入参数: {len(generator.workflow_inputs)}")
-    print(f"输出参数: {len(generator.workflow_outputs)}")
-    print(f"变量定义: {len(generator.variable_definitions)}")
-    print(f"任务调用: {len(generator.calls)}")
+        print(f"流程图已生成: {output_file}")
+        print(f"工作流名称: {generator.workflow_info.get('name', 'Unknown')}")
+        print(f"输入参数: {len(generator.workflow_inputs)}")
+        print(f"输出参数: {len(generator.workflow_outputs)}")
+        print(f"工作流节点: {len(generator.workflow_nodes)}")
+        print(f"任务定义: {len(generator.tasks)}")
+
+    except Exception as e:
+        print(f"生成流程图时发生错误: {e}")
+        import traceback
+
+        traceback.print_exc()
 
 
 if __name__ == "__main__":
