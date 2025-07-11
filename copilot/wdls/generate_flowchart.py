@@ -12,9 +12,21 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 class WDLFlowchartGenerator:
     """WDL工作流程图生成器"""
 
-    def __init__(self, json_file: str):
-        """初始化流程图生成器"""
+    def __init__(self, json_file: str, graph_direction: str = "LR", use_modern_syntax: bool = True):
+        """初始化流程图生成器
+
+        Args:
+            json_file: WDL JSON文件路径
+            graph_direction: 图的布局方向，可选值：
+                - "TD": 从上到下（默认）
+                - "LR": 从左到右（推荐，连接线更有序）
+                - "RL": 从右到左
+                - "BT": 从下到上
+            use_modern_syntax: 是否使用现代化的flowchart语法和ELK布局引擎
+        """
         self.json_file = json_file
+        self.graph_direction = graph_direction
+        self.use_modern_syntax = use_modern_syntax
         self.data = self._load_json()
         self.workflow_info = self._get_workflow_info()
         self.workflow_inputs = self._get_workflow_inputs()
@@ -856,7 +868,57 @@ class WDLFlowchartGenerator:
         if not self.data:
             return "// 数据加载失败"
 
-        mermaid_lines = ["graph TD"]
+        if self.use_modern_syntax:
+            return self._generate_modern_flowchart()
+        else:
+            return self._generate_traditional_flowchart()
+
+    def _generate_modern_flowchart(self) -> str:
+        """生成现代化的flowchart格式"""
+        lines = []
+
+        # 前置配置：使用ELK布局引擎
+        lines.extend(["---", "config:", "  layout: elk", "---", f"flowchart {self.graph_direction}"])
+
+        # 创建节点集合
+        all_node_ids = set()
+
+        # 收集所有节点ID
+        _, input_ids = self._create_input_nodes()
+        all_node_ids.update(input_ids)
+
+        _, var_ids = self._create_variable_nodes()
+        all_node_ids.update(var_ids)
+
+        _, cond_ids = self._create_conditional_nodes()
+        all_node_ids.update(cond_ids)
+
+        _, scatter_ids = self._create_scatter_nodes()
+        all_node_ids.update(scatter_ids)
+
+        _, task_ids = self._create_task_nodes()
+        all_node_ids.update(task_ids)
+
+        _, output_ids = self._create_output_nodes()
+        all_node_ids.update(output_ids)
+
+        # 生成合并的连接语句
+        lines.extend(self._generate_modern_connections(all_node_ids))
+
+        # 生成图例说明
+        lines.extend(self._generate_legend())
+
+        # 生成样式应用
+        lines.extend(self._generate_modern_styles(all_node_ids))
+
+        # 生成样式定义
+        lines.extend(self._generate_mermaid_styles())
+
+        return "\n".join(lines)
+
+    def _generate_traditional_flowchart(self) -> str:
+        """生成传统的graph格式"""
+        mermaid_lines = [f"graph {self.graph_direction}"]
 
         # 添加样式
         mermaid_lines.extend(self._generate_mermaid_styles())
@@ -903,13 +965,294 @@ class WDLFlowchartGenerator:
 
         return "\n".join(mermaid_lines)
 
+    def _generate_modern_connections(self, all_node_ids: Set[str]) -> List[str]:
+        """生成现代化的连接语句"""
+        lines = []
+
+        # 收集所有连接关系
+        connections = {}
+        added_edges = set()
+
+        # 使用现有的边创建逻辑
+        edges = self._create_edges(all_node_ids)
+
+        for edge in edges:
+            if edge.strip().startswith("//") or edge.strip().startswith("%") or not edge.strip():
+                continue
+
+            # 解析边连接: "src --> dst" 或 "src -.-> dst"
+            edge_clean = edge.strip()
+            if " --> " in edge_clean:
+                src, dst = edge_clean.split(" --> ", 1)
+            elif " -.-> " in edge_clean:
+                src, dst = edge_clean.split(" -.-> ", 1)
+            else:
+                continue
+
+            src = src.strip()
+            dst = dst.strip()
+
+            if src not in connections:
+                connections[src] = []
+            if dst not in connections[src]:
+                connections[src].append(dst)
+
+        # 获取节点显示名称
+        node_labels = self._get_node_labels()
+
+        # 生成连接语句
+        for src_node, dst_nodes in connections.items():
+            src_label = node_labels.get(src_node, src_node) or src_node
+            src_shape = self._get_node_shape(src_node, src_label)
+
+            if len(dst_nodes) == 1:
+                # 单个目标
+                dst_node = dst_nodes[0]
+                dst_label = node_labels.get(dst_node, dst_node) or dst_node
+                dst_shape = self._get_node_shape(dst_node, dst_label)
+                lines.append(f"    {src_node}{src_shape} --> {dst_node}{dst_shape}")
+            else:
+                # 多个目标，使用 & 语法
+                dst_parts = []
+                for dst_node in dst_nodes:
+                    dst_label = node_labels.get(dst_node, dst_node) or dst_node
+                    dst_shape = self._get_node_shape(dst_node, dst_label)
+                    dst_parts.append(f"{dst_node}{dst_shape}")
+
+                dst_combined = " & ".join(dst_parts)
+                lines.append(f"    {src_node}{src_shape} --> {dst_combined}")
+
+        return lines
+
+    def _get_node_shape(self, node_id: str, node_label: str) -> str:
+        """根据节点类型返回相应的形状语法"""
+        # 输入节点 - 矩形
+        if node_id.startswith("input_"):
+            return f'["{node_label}"]'
+        # 变量节点 - 圆角矩形
+        elif node_id.startswith("var_"):
+            return f'("{node_label}")'
+        # 任务节点 - 矩形
+        elif node_id.startswith("task_"):
+            return f'["{node_label}"]'
+        # 条件节点 - 菱形
+        elif node_id.startswith("cond_"):
+            return f'{{"{node_label}"}}'
+        # 并行节点 - 平行四边形
+        elif node_id.startswith("scatter_"):
+            return f'[/"{node_label}"/]'
+        # 输出节点 - 矩形
+        elif node_id.startswith("output_"):
+            return f'["{node_label}"]'
+        # 图例节点 - 根据类型设置不同形状
+        elif node_id.startswith("legend_"):
+            if "input" in node_id:
+                return f'["{node_label}"]'
+            elif "var" in node_id:
+                return f'("{node_label}")'
+            elif "task" in node_id:
+                return f'["{node_label}"]'
+            elif "cond" in node_id:
+                return f'{{"{node_label}"}}'
+            elif "scatter" in node_id:
+                return f'[/"{node_label}"/]'
+            elif "output" in node_id:
+                return f'["{node_label}"]'
+            else:
+                return f'["{node_label}"]'
+        # 默认矩形
+        else:
+            return f'["{node_label}"]'
+
+    def _get_node_labels(self) -> Dict[str, str]:
+        """获取所有节点的显示标签"""
+        labels = {}
+
+        # 输入节点标签
+        for input_param in self.workflow_inputs:
+            input_name = input_param.get("name")
+            if input_name:
+                node_id = self._sanitize_node_id(f"input_{input_name}")
+                display_name = self._sanitize_text(input_name, 20)
+                labels[node_id] = f"Input: {display_name}"
+
+        # 变量节点标签
+        for var_def in self._get_variable_definitions():
+            var_name = var_def.get("name")
+            if var_name:
+                node_id = self._sanitize_node_id(f"var_{var_name}")
+                display_name = self._sanitize_text(var_name, 20)
+                labels[node_id] = display_name
+
+        # 任务节点标签
+        for call in self._get_call_nodes():
+            call_name = call.get("call_name")
+            if call_name:
+                node_id = self._sanitize_node_id(f"task_{call_name}")
+                display_name = self._sanitize_text(call_name, 20)
+                labels[node_id] = display_name
+
+        # 条件节点标签
+        for i, cond_node in enumerate(self._get_conditional_nodes()):
+            node_id = self._sanitize_node_id(f"cond_{i+1}")
+            condition = cond_node.get("condition", {})
+            condition_expr = condition.get("raw_expression", "condition")
+            display_condition = self._sanitize_text(condition_expr, 10)
+            labels[node_id] = display_condition
+
+        # 并行节点标签
+        for i, scatter_node in enumerate(self._get_scatter_nodes()):
+            node_id = self._sanitize_node_id(f"scatter_{i+1}")
+            variable = scatter_node.get("variable", "var")
+            expression = scatter_node.get("expression", {})
+            expr_text = expression.get("raw_expression", "range")
+            display_text = f"for {variable} in {self._sanitize_text(expr_text, 20)}"
+            labels[node_id] = display_text
+
+        # 输出节点标签
+        if len(self.workflow_outputs) > 5:
+            # 分组输出
+            output_groups = {}
+            for output in self.workflow_outputs:
+                output_name = output.get("name", "")
+                if output_name:
+                    prefix = output_name.split("_")[0] if "_" in output_name else "outputs"
+                    if prefix not in output_groups:
+                        output_groups[prefix] = []
+                        node_id = self._sanitize_node_id(f"output_{prefix}")
+                        count = len([o for o in self.workflow_outputs if o.get("name", "").startswith(prefix)])
+                        labels[node_id] = f"Output Group: {prefix} - {count} items"
+        else:
+            for output_param in self.workflow_outputs:
+                output_name = output_param.get("name")
+                if output_name:
+                    node_id = self._sanitize_node_id(f"output_{output_name}")
+                    display_name = self._sanitize_text(output_name, 20)
+                    labels[node_id] = display_name
+
+        return labels
+
+    def _generate_modern_styles(self, all_node_ids: Set[str]) -> List[str]:
+        """生成现代化的样式应用语句"""
+        lines = []
+
+        # 输入节点样式
+        for input_param in self.workflow_inputs:
+            input_name = input_param.get("name")
+            if input_name:
+                node_id = self._sanitize_node_id(f"input_{input_name}")
+                is_optional = input_param.get("optional", False)
+                style_class = "inputNodeOptional" if is_optional else "inputNode"
+                lines.append(f"     {node_id}:::{style_class}")
+
+        # 变量节点样式
+        for var_def in self._get_variable_definitions():
+            var_name = var_def.get("name")
+            if var_name:
+                node_id = self._sanitize_node_id(f"var_{var_name}")
+                is_optional = var_def.get("optional", False)
+                style_class = "varNodeOptional" if is_optional else "varNode"
+                lines.append(f"     {node_id}:::{style_class}")
+
+        # 任务节点样式
+        for call in self._get_call_nodes():
+            call_name = call.get("call_name")
+            if call_name:
+                node_id = self._sanitize_node_id(f"task_{call_name}")
+                lines.append(f"     {node_id}:::callNode")
+
+        # 条件节点样式
+        for i, cond_node in enumerate(self._get_conditional_nodes()):
+            node_id = self._sanitize_node_id(f"cond_{i+1}")
+            lines.append(f"     {node_id}:::conditionalNode")
+
+        # 并行节点样式
+        for i, scatter_node in enumerate(self._get_scatter_nodes()):
+            node_id = self._sanitize_node_id(f"scatter_{i+1}")
+            lines.append(f"     {node_id}:::scatterNode")
+
+        # 输出节点样式
+        if len(self.workflow_outputs) > 5:
+            # 分组输出
+            output_groups = {}
+            for output in self.workflow_outputs:
+                output_name = output.get("name", "")
+                if output_name:
+                    prefix = output_name.split("_")[0] if "_" in output_name else "outputs"
+                    if prefix not in output_groups:
+                        output_groups[prefix] = []
+                        node_id = self._sanitize_node_id(f"output_{prefix}")
+                        has_optional = any(o.get("optional", False) for o in self.workflow_outputs if o.get("name", "").startswith(prefix))
+                        style_class = "outputNodeOptional" if has_optional else "outputNode"
+                        lines.append(f"     {node_id}:::{style_class}")
+        else:
+            for output_param in self.workflow_outputs:
+                output_name = output_param.get("name")
+                if output_name:
+                    node_id = self._sanitize_node_id(f"output_{output_name}")
+                    is_optional = output_param.get("optional", False)
+                    style_class = "outputNodeOptional" if is_optional else "outputNode"
+                    lines.append(f"     {node_id}:::{style_class}")
+
+        # 图例节点样式（这些在_generate_legend中已经定义，这里只是确保一致性）
+        legend_styles = [
+            "     legend_input:::inputNode",
+            "     legend_input_opt:::inputNodeOptional",
+            "     legend_var:::varNode",
+            "     legend_var_opt:::varNodeOptional",
+            "     legend_task:::callNode",
+            "     legend_cond:::conditionalNode",
+            "     legend_scatter:::scatterNode",
+            "     legend_output:::outputNode",
+            "     legend_output_opt:::outputNodeOptional",
+        ]
+        lines.extend(legend_styles)
+
+        return lines
+
+    def _generate_legend(self) -> List[str]:
+        """生成图例说明"""
+        lines = []
+
+        # 添加图例子图
+        lines.extend(
+            [
+                '    subgraph legend ["📖 图例说明"]',
+                "        direction TB",
+                '        legend_input["📥 输入参数"]',
+                '        legend_input_opt["📥 可选输入"]',
+                '        legend_var("🔢 变量") ',
+                '        legend_var_opt("🔢 可选变量")',
+                '        legend_task["⚙️ 任务"]',
+                '        legend_cond{"❓ 条件判断"}',
+                '        legend_scatter[/"🔄 并行处理"/]',
+                '        legend_output["📤 输出结果"]',
+                '        legend_output_opt["📤 可选输出"]',
+                "        ",
+                "        legend_input:::inputNode",
+                "        legend_input_opt:::inputNodeOptional",
+                "        legend_var:::varNode",
+                "        legend_var_opt:::varNodeOptional",
+                "        legend_task:::callNode",
+                "        legend_cond:::conditionalNode",
+                "        legend_scatter:::scatterNode",
+                "        legend_output:::outputNode",
+                "        legend_output_opt:::outputNodeOptional",
+                "    end",
+                "",
+            ]
+        )
+
+        return lines
+
 
 def main():
     """主函数"""
-    json_file = "docs/wdl/SAW-ST-V6-reregist-autotest.json"
+    json_file = "docs/wdl/SAW-ST-6.1-alpha3-FFPE-early-access.json"
 
     try:
-        generator = WDLFlowchartGenerator(json_file)
+        # 使用现代化的flowchart语法和ELK布局引擎
+        generator = WDLFlowchartGenerator(json_file, graph_direction="TD", use_modern_syntax=True)
         print("生成WDL工作流程图...")
 
         flowchart = generator.generate_flowchart()

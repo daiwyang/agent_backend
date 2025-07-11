@@ -428,11 +428,11 @@ class SimpleWDLParser:
 
 if __name__ == "__main__":
     # 使用简化的解析器
-    parser = SimpleWDLParser("/data/agent_backend/docs/wdl/SAW-ST-V6-reregist-autotest.wdl")
+    parser = SimpleWDLParser("/data/agent_backend/docs/wdl/sc_pipeline.wdl")
 
     summary = parser.get_workflow_summary()
 
     summary = json.dumps(summary, indent=4)
 
-    with open("/data/agent_backend/docs/wdl/SAW-ST-V6-reregist-autotest.json", "w") as f:
+    with open("/data/agent_backend/docs/wdl/sc_pipeline.json", "w") as f:
         f.write(summary)

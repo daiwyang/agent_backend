@@ -1,4 +1,210 @@
-graph TD
+---
+config:
+  layout: elk
+---
+flowchart TD
+    input_FASTQ["Input: FASTQ"] --> var_jobn("jobn") & var_whetherPE("whetherPE") & var_jobN("jobN") & var_DataLine3("DataLine3")
+    var_Cellbin("Cellbin") --> var_DoCellbin("DoCellbin")
+    input_referenceIndex["Input: referenceIndex"] --> var_indexid("indexid") & task_Report_v2["Report_v2"]
+    var_UMI_Start_Pos("UMI_Start_Pos") --> var_UMIon("UMIon") & task_BarcodeMappingAndStar["BarcodeMappingAnd..."]
+    var_indexid("indexid") --> var_starRef("starRef") & task_RefRead["RefRead"] & task_BcNumCountPE["BcNumCountPE"] & task_BcNumCountSE["BcNumCountSE"] & task_BarcodeMappingAndStar["BarcodeMappingAnd..."] & task_GetExpSE["GetExpSE"] & task_GetExpPE["GetExpPE"]
+    var_whetherPE("whetherPE") --> var_jobN("jobN") & var_annoSummary("annoSummary") & var_raw_fq1_2("raw_fq1_2") & var_raw_fq2_2("raw_fq2_2") & var_slide2("slide2") & cond_1{"!whetherPE"} & cond_2{"whetherPE"} & cond_3{"!whetherPE"} & cond_4{"whetherPE"} & task_BarcodeMappingAndStar["BarcodeMappingAnd..."] & task_TissueCut_vea["TissueCut_vea"] & task_CellCut["CellCut"] & task_Saturation["Saturation"] & output_out02["Output Group: out02 - 22 items"]
+    var_SEn("SEn") --> var_jobN("jobN")
+    var_starRef("starRef") --> var_refPath("refPath") & task_BarcodeMappingAndStar["BarcodeMappingAnd..."]
+    var_refPath("refPath") --> var_genomeFile("genomeFile")
+    var_genomeFile("genomeFile") --> var_genomeSize("genomeSize")
+    var_DataLine3("DataLine3") --> var_raw_fq1_2("raw_fq1_2") & var_raw_fq2_2("raw_fq2_2")
+    var_raw_fq1_2("raw_fq1_2") --> var_base2("base2")
+    var_base2("base2") --> var_slide2("slide2")
+    var_unmappedreads("unmappedreads") --> var_readsunmapped("readsunmapped")
+    task_RefRead["RefRead"] --> var_starRef("starRef") & task_GetExpSE["GetExpSE"] & task_GetExpPE["GetExpPE"]
+    task_GetFQlist["GetFQlist"] --> var_SEn("SEn") & var_raw_fq1("raw_fq1") & var_raw_fq1_2("raw_fq1_2")
+    task_BcNumCountPE["BcNumCountPE"] --> var_PEmem("PEmem") & task_BarcodeMappingAndStar["BarcodeMappingAnd..."]
+    task_BcNumCountSE["BcNumCountSE"] --> var_SEmem("SEmem") & task_BarcodeMappingAndStar["BarcodeMappingAnd..."]
+    task_BarcodeMappingAndStar["BarcodeMappingAnd..."] --> var_unmappedreads("unmappedreads") & var_bcStarStat("bcStarStat") & var_starStat("starStat") & task_GetExpSE["GetExpSE"] & task_GetExpPE["GetExpPE"] & task_MergeBarcodeReadsCount["MergeBarcodeReads..."] & output_out00["Output Group: out00 - 3 items"]
+    task_GetExpPE["GetExpPE"] --> var_annoSummary("annoSummary") & task_TissueCut_vea["TissueCut_vea"] & task_CellCut["CellCut"] & task_Saturation["Saturation"] & output_out02["Output Group: out02 - 22 items"]
+    task_GetExpSE["GetExpSE"] --> var_annoSummary("annoSummary") & task_TissueCut_vea["TissueCut_vea"] & task_CellCut["CellCut"] & task_Saturation["Saturation"] & output_out02["Output Group: out02 - 22 items"]
+    task_ReadsUnmappedRmHost["ReadsUnmappedRmHost"] --> var_unmappedreadsRmhost("unmappedreadsRmhost") & var_rmhostStat("rmhostStat")
+    var_DataLine1("DataLine1") --> var_SEfq("SEfq")
+    var_DataLine("DataLine") --> var_raw_fq1("raw_fq1") & var_raw_fq2("raw_fq2")
+    var_raw_fq1("raw_fq1") --> var_base("base") & var_fq2File("fq2File") & task_BcNumCountSE["BcNumCountSE"] & task_BarcodeMappingAndStar["BarcodeMappingAnd..."]
+    var_base("base") --> var_slide("slide")
+    var_raw_fq2("raw_fq2") --> var_fq2File("fq2File") & task_BarcodeMappingAndStar["BarcodeMappingAnd..."]
+    input_Micro["Input: Micro"] --> cond_5{"Micro == 1"} & task_BarcodeMappingAndStar["BarcodeMappingAnd..."]
+    var_DoCellbin("DoCellbin") --> cond_6{"DoCellbin"}
+    var_jobn("jobn") --> scatter_1[/"for index in rangejobn"/]
+    var_jobN("jobN") --> scatter_2[/"for index in rangejobN"/]
+    cond_1{"!whetherPE"} --> task_SplitBarcodeBin["SplitBarcodeBin"]
+    cond_2{"whetherPE"} --> task_BcNumCountPE["BcNumCountPE"] & var_PEmem("PEmem")
+    cond_3{"!whetherPE"} --> task_GetExpSE["GetExpSE"]
+    cond_4{"whetherPE"} --> task_GetExpPE["GetExpPE"]
+    cond_5{"Micro == 1"} --> var_unmappedreadsRmhost("unmappedreadsRmhost") & var_rmhostStat("rmhostStat") & task_MicrobiomeAnalysis["MicrobiomeAnalysis"]
+    cond_6{"DoCellbin"} --> task_CellCut["CellCut"] & task_CellCluster["CellCluster"]
+    scatter_1[/"for index in rangejobn"/] --> var_DataLine1("DataLine1") & var_SEfq("SEfq")
+    scatter_2[/"for index in rangejobN"/] --> var_DataLine("DataLine") & var_raw_fq1("raw_fq1") & var_raw_fq2("raw_fq2") & var_base("base") & var_slide("slide") & var_fq2File("fq2File") & var_fq2Size("fq2Size") & task_BarcodeMappingAndStar["BarcodeMappingAnd..."]
+    var_dockerUrl("dockerUrl") --> task_RefRead["RefRead"] & task_SplitBarcodeBin["SplitBarcodeBin"] & task_GetFQlist["GetFQlist"] & task_BcNumCountPE["BcNumCountPE"] & task_BcNumCountSE["BcNumCountSE"] & task_BarcodeMappingAndStar["BarcodeMappingAnd..."] & task_GetExpSE["GetExpSE"] & task_GetExpPE["GetExpPE"] & task_MergeBarcodeReadsCount["MergeBarcodeReads..."] & task_Register_vea["Register_vea"] & task_TissueCut_vea["TissueCut_vea"] & task_ReadsUnmappedRmHost["ReadsUnmappedRmHost"] & task_MicrobiomeAnalysis["MicrobiomeAnalysis"] & task_SpatialCluster["SpatialCluster"] & task_CellCut["CellCut"] & task_CellCluster["CellCluster"] & task_Saturation["Saturation"] & task_Report_v2["Report_v2"]
+    input_sampleid["Input: sampleid"] --> task_RefRead["RefRead"] & task_SplitBarcodeBin["SplitBarcodeBin"] & task_GetFQlist["GetFQlist"] & task_BcNumCountSE["BcNumCountSE"] & task_BarcodeMappingAndStar["BarcodeMappingAnd..."] & task_GetExpSE["GetExpSE"] & task_GetExpPE["GetExpPE"] & task_MergeBarcodeReadsCount["MergeBarcodeReads..."] & task_Register_vea["Register_vea"] & task_TissueCut_vea["TissueCut_vea"] & task_ReadsUnmappedRmHost["ReadsUnmappedRmHost"] & task_MicrobiomeAnalysis["MicrobiomeAnalysis"] & task_SpatialCluster["SpatialCluster"] & task_CellCut["CellCut"] & task_CellCluster["CellCluster"] & task_Report_v2["Report_v2"]
+    input_mask["Input: mask"] --> task_SplitBarcodeBin["SplitBarcodeBin"] & task_BcNumCountPE["BcNumCountPE"] & task_BarcodeMappingAndStar["BarcodeMappingAnd..."] & task_MergeBarcodeReadsCount["MergeBarcodeReads..."]
+    input_CIDLength["Input: CIDLength"] --> task_SplitBarcodeBin["SplitBarcodeBin"] & task_BarcodeMappingAndStar["BarcodeMappingAnd..."]
+    input_CIDStart["Input: CIDStart"] --> task_SplitBarcodeBin["SplitBarcodeBin"] & task_BarcodeMappingAndStar["BarcodeMappingAnd..."]
+    input_splitNum["Input: splitNum"] --> task_SplitBarcodeBin["SplitBarcodeBin"]
+    var_SEfq("SEfq") --> task_GetFQlist["GetFQlist"]
+    var_genomeSize("genomeSize") --> task_BcNumCountPE["BcNumCountPE"] & task_BcNumCountSE["BcNumCountSE"]
+    task_SplitBarcodeBin["SplitBarcodeBin"] --> task_BcNumCountSE["BcNumCountSE"]
+    var_RMrRNA("RMrRNA") --> task_BarcodeMappingAndStar["BarcodeMappingAnd..."]
+    var_slide("slide") --> task_BarcodeMappingAndStar["BarcodeMappingAnd..."]
+    var_UMILength("UMILength") --> task_BarcodeMappingAndStar["BarcodeMappingAnd..."]
+    var_UMIRead("UMIRead") --> task_BarcodeMappingAndStar["BarcodeMappingAnd..."]
+    var_fq2Size("fq2Size") --> task_BarcodeMappingAndStar["BarcodeMappingAnd..."]
+    var_SEmem("SEmem") --> task_BarcodeMappingAndStar["BarcodeMappingAnd..."]
+    var_PEmem("PEmem") --> task_BarcodeMappingAndStar["BarcodeMappingAnd..."]
+    var_UMIon("UMIon") --> task_GetExpSE["GetExpSE"] & task_GetExpPE["GetExpPE"]
+    var_SlideArea("SlideArea") --> task_MergeBarcodeReadsCount["MergeBarcodeReads..."] & task_Register_vea["Register_vea"] & task_TissueCut_vea["TissueCut_vea"] & task_Report_v2["Report_v2"]
+    input_imageTAR["Input: imageTAR"] --> task_Register_vea["Register_vea"]
+    input_imageIPR["Input: imageIPR"] --> task_Register_vea["Register_vea"]
+    task_MergeBarcodeReadsCount["MergeBarcodeReads..."] --> task_TissueCut_vea["TissueCut_vea"] & output_out01["Output Group: out01 - 1 items"]
+    task_Register_vea["Register_vea"] --> task_TissueCut_vea["TissueCut_vea"] & task_CellCut["CellCut"] & task_Report_v2["Report_v2"] & output_out03["Output Group: out03 - 13 items"]
+    var_slide2("slide2") --> task_ReadsUnmappedRmHost["ReadsUnmappedRmHost"]
+    input_hostref["Input: hostref"] --> task_ReadsUnmappedRmHost["ReadsUnmappedRmHost"] & task_MicrobiomeAnalysis["MicrobiomeAnalysis"]
+    var_readsunmapped("readsunmapped") --> task_ReadsUnmappedRmHost["ReadsUnmappedRmHost"]
+    input_kraken_database["Input: kraken_database"] --> task_MicrobiomeAnalysis["MicrobiomeAnalysis"]
+    var_unmappedreadsRmhost("unmappedreadsRmhost") --> task_MicrobiomeAnalysis["MicrobiomeAnalysis"]
+    var_rmhostStat("rmhostStat") --> task_MicrobiomeAnalysis["MicrobiomeAnalysis"]
+    task_TissueCut_vea["TissueCut_vea"] --> task_MicrobiomeAnalysis["MicrobiomeAnalysis"] & task_SpatialCluster["SpatialCluster"] & task_Saturation["Saturation"] & task_Report_v2["Report_v2"] & output_out04["Output Group: out04 - 8 items"]
+    task_CellCut["CellCut"] --> task_CellCluster["CellCluster"] & task_Report_v2["Report_v2"] & output_out041["Output Group: out041 - 3 items"]
+    var_annoSummary("annoSummary") --> task_Saturation["Saturation"] & task_Report_v2["Report_v2"]
+    var_bcStarStat("bcStarStat") --> task_Saturation["Saturation"] & task_Report_v2["Report_v2"]
+    input_Tissue["Input: Tissue"] --> task_Report_v2["Report_v2"]
+    var_starStat("starStat") --> task_Report_v2["Report_v2"]
+    task_SpatialCluster["SpatialCluster"] --> task_Report_v2["Report_v2"] & output_out05["Output Group: out05 - 3 items"]
+    task_Saturation["Saturation"] --> task_Report_v2["Report_v2"] & output_out06["Output Group: out06 - 1 items"]
+    task_CellCluster["CellCluster"] --> task_Report_v2["Report_v2"] & output_out051["Output Group: out051 - 2 items"]
+    task_MicrobiomeAnalysis["MicrobiomeAnalysis"] --> output_out021["Output Group: out021 - 17 items"]
+    task_Report_v2["Report_v2"] --> output_out07["Output Group: out07 - 2 items"]
+    subgraph legend ["📖 图例说明"]
+        direction TB
+        legend_input["📥 输入参数"]
+        legend_input_opt["📥 可选输入"]
+        legend_var("🔢 变量") 
+        legend_var_opt("🔢 可选变量")
+        legend_task["⚙️ 任务"]
+        legend_cond{"❓ 条件判断"}
+        legend_scatter[/"🔄 并行处理"/]
+        legend_output["📤 输出结果"]
+        legend_output_opt["📤 可选输出"]
+        
+        legend_input:::inputNode
+        legend_input_opt:::inputNodeOptional
+        legend_var:::varNode
+        legend_var_opt:::varNodeOptional
+        legend_task:::callNode
+        legend_cond:::conditionalNode
+        legend_scatter:::scatterNode
+        legend_output:::outputNode
+        legend_output_opt:::outputNodeOptional
+    end
+
+     input_sampleid:::inputNode
+     input_FASTQ:::inputNode
+     input_mask:::inputNode
+     input_imageTAR:::inputNodeOptional
+     input_imageIPR:::inputNodeOptional
+     input_splitNum:::inputNode
+     input_Tissue:::inputNode
+     input_CIDStart:::inputNode
+     input_CIDLength:::inputNode
+     input_referenceIndex:::inputNode
+     input_Micro:::inputNode
+     input_hostref:::inputNodeOptional
+     input_kraken_database:::inputNodeOptional
+     var_SlideArea:::varNode
+     var_UMI_Start_Pos:::varNode
+     var_UMILength:::varNode
+     var_UMIRead:::varNode
+     var_ReadLength:::varNode
+     var_Cellbin:::varNode
+     var_RMrRNA:::varNode
+     var_jobn:::varNode
+     var_whetherPE:::varNode
+     var_DoCellbin:::varNode
+     var_dockerUrl:::varNode
+     var_indexid:::varNode
+     var_UMIon:::varNode
+     var_starRef:::varNode
+     var_DataLine1:::varNode
+     var_SEfq:::varNode
+     var_SEn:::varNode
+     var_jobN:::varNode
+     var_refPath:::varNode
+     var_genomeFile:::varNode
+     var_genomeSize:::varNode
+     var_PEmem:::varNode
+     var_DataLine:::varNode
+     var_raw_fq1:::varNode
+     var_raw_fq2:::varNode
+     var_base:::varNode
+     var_slide:::varNode
+     var_fq2File:::varNode
+     var_fq2Size:::varNode
+     var_SEmem:::varNode
+     var_unmappedreads:::varNode
+     var_bcStarStat:::varNode
+     var_annoSummary:::varNodeOptional
+     var_starStat:::varNode
+     var_DataLine3:::varNode
+     var_raw_fq1_2:::varNode
+     var_raw_fq2_2:::varNode
+     var_base2:::varNode
+     var_slide2:::varNode
+     var_readsunmapped:::varNodeOptional
+     var_unmappedreadsRmhost:::varNode
+     var_rmhostStat:::varNode
+     task_RefRead:::callNode
+     task_SplitBarcodeBin:::callNode
+     task_GetFQlist:::callNode
+     task_BcNumCountPE:::callNode
+     task_BcNumCountSE:::callNode
+     task_BarcodeMappingAndStar:::callNode
+     task_GetExpSE:::callNode
+     task_GetExpPE:::callNode
+     task_MergeBarcodeReadsCount:::callNode
+     task_Register_vea:::callNode
+     task_TissueCut_vea:::callNode
+     task_ReadsUnmappedRmHost:::callNode
+     task_MicrobiomeAnalysis:::callNode
+     task_SpatialCluster:::callNode
+     task_CellCut:::callNode
+     task_CellCluster:::callNode
+     task_Saturation:::callNode
+     task_Report_v2:::callNode
+     cond_1:::conditionalNode
+     cond_2:::conditionalNode
+     cond_3:::conditionalNode
+     cond_4:::conditionalNode
+     cond_5:::conditionalNode
+     cond_6:::conditionalNode
+     scatter_1:::scatterNode
+     scatter_2:::scatterNode
+     output_out00:::outputNodeOptional
+     output_out01:::outputNodeOptional
+     output_out02:::outputNodeOptional
+     output_out021:::outputNodeOptional
+     output_out03:::outputNodeOptional
+     output_out04:::outputNodeOptional
+     output_out041:::outputNodeOptional
+     output_out05:::outputNodeOptional
+     output_out051:::outputNodeOptional
+     output_out06:::outputNodeOptional
+     output_out07:::outputNodeOptional
+     legend_input:::inputNode
+     legend_input_opt:::inputNodeOptional
+     legend_var:::varNode
+     legend_var_opt:::varNodeOptional
+     legend_task:::callNode
+     legend_cond:::conditionalNode
+     legend_scatter:::scatterNode
+     legend_output:::outputNode
+     legend_output_opt:::outputNodeOptional
     %% 节点样式定义
     classDef inputNode fill:#e0f2f1,stroke:#00695c,stroke-width:2px
     classDef inputNodeOptional fill:#e0f2f1,stroke:#00695c,stroke-width:2px,stroke-dasharray: 5 3
@@ -9,118 +215,3 @@ graph TD
     classDef varNodeOptional fill:#f3e5f5,stroke:#7b1fa2,stroke-width:1px,stroke-dasharray: 5 3
     classDef conditionalNode fill:#ffecb3,stroke:#f57c00,stroke-width:2px
     classDef scatterNode fill:#f8bbd9,stroke:#ad1457,stroke-width:2px
-
-    input_SN["Input: SN"]
-    class input_SN inputNode
-    input_RegistJson["Input: RegistJson"]
-    class input_RegistJson inputNode
-    input_DataDir["Input: DataDir"]
-    class input_DataDir inputNode
-    input_ImageTar["Input: ImageTar"]
-    class input_ImageTar inputNode
-    input_ImagePreDir["Input: ImagePreDir"]
-    class input_ImagePreDir inputNode
-    input_Tissue["Input: Tissue"]
-    class input_Tissue inputNode
-    input_Reference["Input: Reference"]
-    class input_Reference inputNode
-    var_Outdir("Outdir")
-    class var_Outdir varNode
-    var_SNID("SNID")
-    class var_SNID varNode
-    var_ImagePre("ImagePre")
-    class var_ImagePre varNode
-    var_Species("Species")
-    class var_Species varNode
-    var_dockerUrl("dockerUrl")
-    class var_dockerUrl varNode
-    cond_1{"read_bo..."}
-    class cond_1 conditionalNode
-    task_GetPreVersion["GetPreVersion"]
-    class task_GetPreVersion callNode
-    task_Link["Link"]
-    class task_Link callNode
-    task_ReRegister_v3["ReRegister_v3"]
-    class task_ReRegister_v3 callNode
-    task_TissueCut["TissueCut"]
-    class task_TissueCut callNode
-    task_SpatialCluster["SpatialCluster"]
-    class task_SpatialCluster callNode
-    task_CellCut["CellCut"]
-    class task_CellCut callNode
-    task_CellCluster["CellCluster"]
-    class task_CellCluster callNode
-    task_Saturation["Saturation"]
-    class task_Saturation callNode
-    task_Report_v2["Report_v2"]
-    class task_Report_v2 callNode
-    output_out03["Output Group: out03 - 1 items"]
-    class output_out03 outputNodeOptional
-    output_out04["Output Group: out04 - 1 items"]
-    class output_out04 outputNodeOptional
-    output_out041["Output Group: out041 - 1 items"]
-    class output_out041 outputNodeOptional
-    output_out05["Output Group: out05 - 1 items"]
-    class output_out05 outputNodeOptional
-    output_out051["Output Group: out051 - 1 items"]
-    class output_out051 outputNodeOptional
-    output_out06["Output Group: out06 - 1 items"]
-    class output_out06 outputNodeOptional
-    output_out07["Output Group: out07 - 1 items"]
-    class output_out07 outputNodeOptional
-
-    input_SN --> var_SNID
-    input_ImagePreDir --> var_ImagePre
-    input_Reference --> var_Species
-    task_GetPreVersion --> cond_1
-    cond_1 -.-> task_CellCut
-    cond_1 -.-> task_CellCluster
-    input_DataDir --> task_GetPreVersion
-    var_dockerUrl --> task_GetPreVersion
-    input_DataDir --> task_Link
-    var_SNID --> task_Link
-    var_dockerUrl --> task_Link
-    var_SNID --> task_ReRegister_v3
-    input_RegistJson --> task_ReRegister_v3
-    input_ImageTar --> task_ReRegister_v3
-    input_DataDir --> task_ReRegister_v3
-    var_ImagePre --> task_ReRegister_v3
-    var_dockerUrl --> task_ReRegister_v3
-    task_Link --> task_TissueCut
-    var_SNID --> task_TissueCut
-    task_ReRegister_v3 --> task_TissueCut
-    var_ImagePre --> task_TissueCut
-    var_dockerUrl --> task_TissueCut
-    task_TissueCut --> task_SpatialCluster
-    var_SNID --> task_SpatialCluster
-    var_dockerUrl --> task_SpatialCluster
-    task_Link --> task_CellCut
-    var_SNID --> task_CellCut
-    task_ReRegister_v3 --> task_CellCut
-    var_ImagePre --> task_CellCut
-    var_dockerUrl --> task_CellCut
-    task_CellCut --> task_CellCluster
-    var_SNID --> task_CellCluster
-    var_ImagePre --> task_CellCluster
-    var_dockerUrl --> task_CellCluster
-    task_Link --> task_Saturation
-    task_TissueCut --> task_Saturation
-    var_dockerUrl --> task_Saturation
-    var_dockerUrl --> task_Report_v2
-    task_Link --> task_Report_v2
-    task_TissueCut --> task_Report_v2
-    task_SpatialCluster --> task_Report_v2
-    task_Saturation --> task_Report_v2
-    task_ReRegister_v3 --> task_Report_v2
-    var_SNID --> task_Report_v2
-    task_CellCut --> task_Report_v2
-    task_CellCluster --> task_Report_v2
-    input_Tissue --> task_Report_v2
-    var_Species --> task_Report_v2
-    task_ReRegister_v3 --> output_out03
-    task_TissueCut --> output_out04
-    task_CellCut --> output_out041
-    task_SpatialCluster --> output_out05
-    task_CellCluster --> output_out051
-    task_Saturation --> output_out06
-    task_Report_v2 --> output_out07
