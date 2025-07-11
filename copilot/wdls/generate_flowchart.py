@@ -85,6 +85,14 @@ class WDLFlowchartGenerator:
         extract_vars_from_nodes(self.workflow_nodes)
         return var_nodes
 
+    def _get_conditional_nodes(self) -> List[Dict[str, Any]]:
+        """获取条件节点"""
+        return [node for node in self.workflow_nodes if node.get("node_type") == "conditional"]
+
+    def _get_scatter_nodes(self) -> List[Dict[str, Any]]:
+        """获取并行节点"""
+        return [node for node in self.workflow_nodes if node.get("node_type") == "scatter"]
+
     def _sanitize_node_id(self, node_id: str) -> str:
         """清理节点ID，确保Mermaid兼容"""
         if not node_id:
@@ -131,6 +139,8 @@ class WDLFlowchartGenerator:
             "    classDef outputNode fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px",
             "    classDef callNode fill:#e3f2fd,stroke:#1976d2,stroke-width:2px",
             "    classDef varNode fill:#f3e5f5,stroke:#7b1fa2,stroke-width:1px",
+            "    classDef conditionalNode fill:#ffecb3,stroke:#f57c00,stroke-width:2px",
+            "    classDef scatterNode fill:#e1f5fe,stroke:#0288d1,stroke-width:2px",
         ]
 
     def _create_input_nodes(self) -> Tuple[List[str], Set[str]]:
@@ -252,6 +262,55 @@ class WDLFlowchartGenerator:
 
         return nodes, node_ids
 
+    def _create_conditional_nodes(self) -> Tuple[List[str], Set[str]]:
+        """创建条件节点"""
+        nodes = []
+        node_ids = set()
+
+        conditional_nodes = self._get_conditional_nodes()
+        for i, cond_node in enumerate(conditional_nodes):
+            # 为每个条件节点生成唯一ID
+            node_id = f"cond_{i+1}"
+            sanitized_id = self._sanitize_node_id(node_id)
+
+            # 获取条件表达式
+            condition = cond_node.get("condition", {})
+            condition_expr = condition.get("raw_expression", "condition")
+            display_condition = self._sanitize_text(condition_expr, 30)
+
+            # 显示条件节点（使用菱形）
+            nodes.append(f'    {sanitized_id}{{"{display_condition}"}}')
+            nodes.append(f"    class {sanitized_id} conditionalNode")
+            node_ids.add(sanitized_id)
+
+        return nodes, node_ids
+
+    def _create_scatter_nodes(self) -> Tuple[List[str], Set[str]]:
+        """创建并行节点"""
+        nodes = []
+        node_ids = set()
+
+        scatter_nodes = self._get_scatter_nodes()
+        for i, scatter_node in enumerate(scatter_nodes):
+            # 为每个并行节点生成唯一ID
+            node_id = f"scatter_{i+1}"
+            sanitized_id = self._sanitize_node_id(node_id)
+
+            # 获取并行变量和表达式
+            variable = scatter_node.get("variable", "var")
+            expression = scatter_node.get("expression", {})
+            expr_text = expression.get("raw_expression", "range")
+
+            # 组合显示文本
+            display_text = f"for {variable} in {self._sanitize_text(expr_text, 20)}"
+
+            # 显示并行节点（使用平行四边形）
+            nodes.append(f'    {sanitized_id}[/"{display_text}"/]')
+            nodes.append(f"    class {sanitized_id} scatterNode")
+            node_ids.add(sanitized_id)
+
+        return nodes, node_ids
+
     def _extract_expression_dependencies(self, expression: Dict[str, Any]) -> Set[str]:
         """从表达式中提取依赖变量"""
         dependencies = set()
@@ -350,9 +409,35 @@ class WDLFlowchartGenerator:
 
         return None
 
+    def _get_tasks_in_control_structures(self) -> Set[str]:
+        """获取位于控制结构中的任务名称"""
+        tasks_in_control = set()
+
+        # 检查条件节点中的任务
+        for cond_node in self._get_conditional_nodes():
+            for body_node in cond_node.get("body", []):
+                if body_node.get("node_type") == "call":
+                    tasks_in_control.add(body_node.get("call_name"))
+
+        # 检查并行节点中的任务
+        for scatter_node in self._get_scatter_nodes():
+            for body_node in scatter_node.get("body", []):
+                if body_node.get("node_type") == "call":
+                    tasks_in_control.add(body_node.get("call_name"))
+                # 检查嵌套的条件节点
+                elif body_node.get("node_type") == "conditional":
+                    for nested_node in body_node.get("body", []):
+                        if nested_node.get("node_type") == "call":
+                            tasks_in_control.add(nested_node.get("call_name"))
+
+        return tasks_in_control
+
     def _create_task_input_edges(self, all_node_ids: Set[str], added_edges: Set[Tuple[str, str]]) -> List[str]:
         """创建任务输入边"""
         edges = []
+
+        # 获取位于控制结构中的任务
+        tasks_in_control = self._get_tasks_in_control_structures()
 
         call_nodes = self._get_call_nodes()
         for call in call_nodes:
@@ -375,8 +460,18 @@ class WDLFlowchartGenerator:
                         if src_node_id and task_node_id in all_node_ids:
                             edge = (src_node_id, task_node_id)
                             if edge not in added_edges:
-                                edges.append(f"    {src_node_id} --> {task_node_id}")
-                                added_edges.add(edge)
+                                # 对于控制结构中的任务，允许输入参数、变量和任务输出的连接
+                                if call_name in tasks_in_control:
+                                    # 允许工作流输入参数、变量和任务输出到控制结构中的任务
+                                    if (src_node_id.startswith("input_") or 
+                                        src_node_id.startswith("var_") or 
+                                        src_node_id.startswith("task_")):
+                                        edges.append(f"    {src_node_id} --> {task_node_id}")
+                                        added_edges.add(edge)
+                                else:
+                                    # 非控制结构中的任务，建立所有连接
+                                    edges.append(f"    {src_node_id} --> {task_node_id}")
+                                    added_edges.add(edge)
 
         return edges
 
@@ -437,9 +532,68 @@ class WDLFlowchartGenerator:
 
         return var_deps
 
-    def _create_variable_dependency_edges(self, all_node_ids: Set[str], added_edges: Set[Tuple[str, str]]) -> List[str]:
-        """创建变量依赖边"""
+    def _get_variables_in_control_structures(self) -> Set[str]:
+        """获取位于控制结构中的变量名称"""
+        vars_in_control = set()
+
+        # 检查条件节点中的变量
+        for cond_node in self._get_conditional_nodes():
+            for body_node in cond_node.get("body", []):
+                if body_node.get("node_type") == "declaration":
+                    vars_in_control.add(body_node.get("name"))
+
+        # 检查并行节点中的变量
+        for scatter_node in self._get_scatter_nodes():
+            for body_node in scatter_node.get("body", []):
+                if body_node.get("node_type") == "declaration":
+                    vars_in_control.add(body_node.get("name"))
+                # 检查嵌套的条件节点
+                elif body_node.get("node_type") == "conditional":
+                    for nested_node in body_node.get("body", []):
+                        if nested_node.get("node_type") == "declaration":
+                            vars_in_control.add(nested_node.get("name"))
+
+        return vars_in_control
+
+    def _create_task_output_to_variable_edges(self, all_node_ids: Set[str], added_edges: Set[Tuple[str, str]]) -> List[str]:
+        """创建任务输出到变量的边"""
         edges = []
+
+        variable_definitions = self._get_variable_definitions()
+        for var_def in variable_definitions:
+            var_name = var_def.get("name")
+            expression = var_def.get("expression")
+
+            if not var_name or not expression:
+                continue
+
+            var_node_id = self._sanitize_node_id(f"var_{var_name}")
+            if var_node_id not in all_node_ids:
+                continue
+
+            # 从表达式中提取依赖
+            dependencies = self._extract_expression_dependencies(expression)
+
+            for dep in dependencies:
+                # 只处理任务输出（包含.的依赖）
+                if "." in dep:
+                    task_name = dep.split(".")[0]
+                    task_node_id = self._sanitize_node_id(f"task_{task_name}")
+
+                    if task_node_id in all_node_ids:
+                        edge = (task_node_id, var_node_id)
+                        if edge not in added_edges:
+                            edges.append(f"    {task_node_id} --> {var_node_id}")
+                            added_edges.add(edge)
+
+        return edges
+
+    def _create_control_structure_variable_output_edges(self, all_node_ids: Set[str], added_edges: Set[Tuple[str, str]]) -> List[str]:
+        """创建控制结构中变量的输出连接"""
+        edges = []
+
+        # 获取位于控制结构中的变量
+        vars_in_control = self._get_variables_in_control_structures()
 
         variable_definitions = self._get_variable_definitions()
         for var_def in variable_definitions:
@@ -455,6 +609,50 @@ class WDLFlowchartGenerator:
             dependencies = self._extract_expression_dependencies(expression)
 
             for dep in dependencies:
+                # 只处理控制结构中的变量作为依赖
+                if dep in vars_in_control:
+                    src_node_id = self._sanitize_node_id(f"var_{dep}")
+
+                    if src_node_id in all_node_ids and var_node_id in all_node_ids:
+                        edge = (src_node_id, var_node_id)
+                        if edge not in added_edges:
+                            edges.append(f"    {src_node_id} --> {var_node_id}")
+                            added_edges.add(edge)
+
+        return edges
+
+    def _create_variable_dependency_edges(self, all_node_ids: Set[str], added_edges: Set[Tuple[str, str]]) -> List[str]:
+        """创建变量依赖边"""
+        edges = []
+
+        # 获取位于控制结构中的变量
+        vars_in_control = self._get_variables_in_control_structures()
+
+        variable_definitions = self._get_variable_definitions()
+        for var_def in variable_definitions:
+            var_name = var_def.get("name")
+            expression = var_def.get("expression")
+
+            if not var_name or not expression:
+                continue
+
+            var_node_id = self._sanitize_node_id(f"var_{var_name}")
+
+            # 如果变量在控制结构中，跳过直接连接（应该通过控制节点连接）
+            if var_name in vars_in_control:
+                continue
+
+            # 从表达式中提取依赖
+            dependencies = self._extract_expression_dependencies(expression)
+
+            for dep in dependencies:
+                # 跳过任务输出依赖（这些由专门的方法处理）
+                if "." in dep:
+                    continue
+                # 跳过控制结构中的变量依赖（这些由专门的方法处理）
+                if dep in vars_in_control:
+                    continue
+
                 src_node_id = self._resolve_dependency_node(dep, all_node_ids)
 
                 if src_node_id and var_node_id in all_node_ids:
@@ -465,18 +663,156 @@ class WDLFlowchartGenerator:
 
         return edges
 
+    def _create_conditional_dependency_edges(self, all_node_ids: Set[str], added_edges: Set[Tuple[str, str]]) -> List[str]:
+        """创建条件节点依赖边"""
+        edges = []
+
+        conditional_nodes = self._get_conditional_nodes()
+        for i, cond_node in enumerate(conditional_nodes):
+            cond_node_id = self._sanitize_node_id(f"cond_{i+1}")
+
+            # 从条件表达式中提取依赖
+            condition = cond_node.get("condition", {})
+            if condition:
+                dependencies = self._extract_expression_dependencies(condition)
+
+                for dep in dependencies:
+                    src_node_id = self._resolve_dependency_node(dep, all_node_ids)
+
+                    if src_node_id and cond_node_id in all_node_ids:
+                        edge = (src_node_id, cond_node_id)
+                        if edge not in added_edges:
+                            edges.append(f"    {src_node_id} --> {cond_node_id}")
+                            added_edges.add(edge)
+
+        return edges
+
+    def _create_scatter_dependency_edges(self, all_node_ids: Set[str], added_edges: Set[Tuple[str, str]]) -> List[str]:
+        """创建并行节点依赖边"""
+        edges = []
+
+        scatter_nodes = self._get_scatter_nodes()
+        for i, scatter_node in enumerate(scatter_nodes):
+            scatter_node_id = self._sanitize_node_id(f"scatter_{i+1}")
+
+            # 从并行表达式中提取依赖
+            expression = scatter_node.get("expression", {})
+            if expression:
+                dependencies = self._extract_expression_dependencies(expression)
+
+                for dep in dependencies:
+                    src_node_id = self._resolve_dependency_node(dep, all_node_ids)
+
+                    if src_node_id and scatter_node_id in all_node_ids:
+                        edge = (src_node_id, scatter_node_id)
+                        if edge not in added_edges:
+                            edges.append(f"    {src_node_id} --> {scatter_node_id}")
+                            added_edges.add(edge)
+
+        return edges
+
+    def _create_conditional_output_edges(self, all_node_ids: Set[str], added_edges: Set[Tuple[str, str]]) -> List[str]:
+        """创建条件节点输出边"""
+        edges = []
+
+        conditional_nodes = self._get_conditional_nodes()
+        for i, cond_node in enumerate(conditional_nodes):
+            cond_node_id = self._sanitize_node_id(f"cond_{i+1}")
+
+            # 条件节点连接到其body内的任务和变量节点
+            body_nodes = cond_node.get("body", [])
+
+            for body_node in body_nodes:
+                if body_node.get("node_type") == "call":
+                    # 连接到任务节点
+                    call_name = body_node.get("call_name")
+                    if call_name:
+                        target_node_id = self._sanitize_node_id(f"task_{call_name}")
+                        if target_node_id in all_node_ids:
+                            edge = (cond_node_id, target_node_id)
+                            if edge not in added_edges:
+                                edges.append(f"    {cond_node_id} --> {target_node_id}")
+                                added_edges.add(edge)
+
+                elif body_node.get("node_type") == "declaration":
+                    # 连接到变量节点
+                    var_name = body_node.get("name")
+                    if var_name:
+                        target_node_id = self._sanitize_node_id(f"var_{var_name}")
+                        if target_node_id in all_node_ids:
+                            edge = (cond_node_id, target_node_id)
+                            if edge not in added_edges:
+                                edges.append(f"    {cond_node_id} --> {target_node_id}")
+                                added_edges.add(edge)
+
+        return edges
+
+    def _create_scatter_output_edges(self, all_node_ids: Set[str], added_edges: Set[Tuple[str, str]]) -> List[str]:
+        """创建并行节点输出边"""
+        edges = []
+
+        scatter_nodes = self._get_scatter_nodes()
+        for i, scatter_node in enumerate(scatter_nodes):
+            scatter_node_id = self._sanitize_node_id(f"scatter_{i+1}")
+
+            # 并行节点连接到其body内的任务和变量节点
+            body_nodes = scatter_node.get("body", [])
+
+            for body_node in body_nodes:
+                if body_node.get("node_type") == "call":
+                    # 连接到任务节点
+                    call_name = body_node.get("call_name")
+                    if call_name:
+                        target_node_id = self._sanitize_node_id(f"task_{call_name}")
+                        if target_node_id in all_node_ids:
+                            edge = (scatter_node_id, target_node_id)
+                            if edge not in added_edges:
+                                edges.append(f"    {scatter_node_id} --> {target_node_id}")
+                                added_edges.add(edge)
+
+                elif body_node.get("node_type") == "declaration":
+                    # 连接到变量节点
+                    var_name = body_node.get("name")
+                    if var_name:
+                        target_node_id = self._sanitize_node_id(f"var_{var_name}")
+                        if target_node_id in all_node_ids:
+                            edge = (scatter_node_id, target_node_id)
+                            if edge not in added_edges:
+                                edges.append(f"    {scatter_node_id} --> {target_node_id}")
+                                added_edges.add(edge)
+
+        return edges
+
     def _create_edges(self, all_node_ids: Set[str]) -> List[str]:
         """创建所有边连接"""
         edges = []
         added_edges = set()
 
-        # 1. 变量依赖边
+        # 1. 变量依赖边（输入和变量之间）
         edges.extend(self._create_variable_dependency_edges(all_node_ids, added_edges))
 
-        # 2. 任务输入边
+        # 2. 任务输出到变量的边
+        edges.extend(self._create_task_output_to_variable_edges(all_node_ids, added_edges))
+
+        # 3. 控制结构中变量的输出边
+        edges.extend(self._create_control_structure_variable_output_edges(all_node_ids, added_edges))
+
+        # 4. 条件节点依赖边（输入）
+        edges.extend(self._create_conditional_dependency_edges(all_node_ids, added_edges))
+
+        # 5. 并行节点依赖边（输入）
+        edges.extend(self._create_scatter_dependency_edges(all_node_ids, added_edges))
+
+        # 6. 条件节点输出边
+        edges.extend(self._create_conditional_output_edges(all_node_ids, added_edges))
+
+        # 7. 并行节点输出边
+        edges.extend(self._create_scatter_output_edges(all_node_ids, added_edges))
+
+        # 8. 任务输入边
         edges.extend(self._create_task_input_edges(all_node_ids, added_edges))
 
-        # 3. 输出边
+        # 9. 输出边
         edges.extend(self._create_output_edges(all_node_ids, added_edges))
 
         return edges
@@ -504,6 +840,16 @@ class WDLFlowchartGenerator:
         var_nodes, var_ids = self._create_variable_nodes()
         mermaid_lines.extend(var_nodes)
         all_node_ids.update(var_ids)
+
+        # 条件节点
+        cond_nodes, cond_ids = self._create_conditional_nodes()
+        mermaid_lines.extend(cond_nodes)
+        all_node_ids.update(cond_ids)
+
+        # 并行节点
+        scatter_nodes, scatter_ids = self._create_scatter_nodes()
+        mermaid_lines.extend(scatter_nodes)
+        all_node_ids.update(scatter_ids)
 
         # 任务节点
         task_nodes, task_ids = self._create_task_nodes()

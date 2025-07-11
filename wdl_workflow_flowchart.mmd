@@ -4,6 +4,8 @@ graph TD
     classDef outputNode fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px
     classDef callNode fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
     classDef varNode fill:#f3e5f5,stroke:#7b1fa2,stroke-width:1px
+    classDef conditionalNode fill:#ffecb3,stroke:#f57c00,stroke-width:2px
+    classDef scatterNode fill:#e1f5fe,stroke:#0288d1,stroke-width:2px
 
     input_sampleid["sampleid"]
     class input_sampleid inputNode
@@ -115,6 +117,22 @@ graph TD
     class var_unmappedreadsRmhost varNode
     var_rmhostStat("rmhostStat")
     class var_rmhostStat varNode
+    cond_1{"!whetherPE"}
+    class cond_1 conditionalNode
+    cond_2{"whetherPE"}
+    class cond_2 conditionalNode
+    cond_3{"!whetherPE"}
+    class cond_3 conditionalNode
+    cond_4{"whetherPE"}
+    class cond_4 conditionalNode
+    cond_5{"Micro == 1"}
+    class cond_5 conditionalNode
+    cond_6{"DoCellbin"}
+    class cond_6 conditionalNode
+    scatter_1[/"for index in rangejobn"/]
+    class scatter_1 scatterNode
+    scatter_2[/"for index in rangejobN"/]
+    class scatter_2 scatterNode
     task_RefRead["RefRead"]
     class task_RefRead callNode
     task_SplitBarcodeBin["SplitBarcodeBin"]
@@ -179,49 +197,71 @@ graph TD
     var_Cellbin --> var_DoCellbin
     input_referenceIndex --> var_indexid
     var_UMI_Start_Pos --> var_UMIon
-    task_RefRead --> var_starRef
     var_indexid --> var_starRef
-    input_FASTQ --> var_DataLine1
-    var_DataLine1 --> var_SEfq
-    task_GetFQlist --> var_SEn
+    input_FASTQ --> var_jobN
     var_SEn --> var_jobN
     var_whetherPE --> var_jobN
-    input_FASTQ --> var_jobN
     var_starRef --> var_refPath
     var_refPath --> var_genomeFile
     var_genomeFile --> var_genomeSize
-    task_BcNumCountPE --> var_PEmem
-    input_FASTQ --> var_DataLine
-    var_whetherPE --> var_raw_fq1
-    task_GetFQlist --> var_raw_fq1
-    var_DataLine --> var_raw_fq1
-    var_DataLine --> var_raw_fq2
-    var_whetherPE --> var_raw_fq2
-    var_raw_fq1 --> var_base
-    var_whetherPE --> var_slide
-    var_base --> var_slide
-    var_raw_fq2 --> var_fq2File
-    var_whetherPE --> var_fq2File
-    var_raw_fq1 --> var_fq2File
-    task_BcNumCountSE --> var_SEmem
-    task_BarcodeMappingAndStar --> var_unmappedreads
-    task_BarcodeMappingAndStar --> var_bcStarStat
-    task_GetExpPE --> var_annoSummary
     var_whetherPE --> var_annoSummary
-    task_GetExpSE --> var_annoSummary
-    task_BarcodeMappingAndStar --> var_starStat
     input_FASTQ --> var_DataLine3
-    var_whetherPE --> var_raw_fq1_2
-    task_GetFQlist --> var_raw_fq1_2
     var_DataLine3 --> var_raw_fq1_2
+    var_whetherPE --> var_raw_fq1_2
     var_DataLine3 --> var_raw_fq2_2
     var_whetherPE --> var_raw_fq2_2
     var_raw_fq1_2 --> var_base2
     var_base2 --> var_slide2
     var_whetherPE --> var_slide2
     var_unmappedreads --> var_readsunmapped
+    task_RefRead --> var_starRef
+    task_GetFQlist --> var_SEn
+    task_BcNumCountPE --> var_PEmem
+    task_GetFQlist --> var_raw_fq1
+    task_BcNumCountSE --> var_SEmem
+    task_BarcodeMappingAndStar --> var_unmappedreads
+    task_BarcodeMappingAndStar --> var_bcStarStat
+    task_GetExpSE --> var_annoSummary
+    task_GetExpPE --> var_annoSummary
+    task_BarcodeMappingAndStar --> var_starStat
+    task_GetFQlist --> var_raw_fq1_2
     task_ReadsUnmappedRmHost --> var_unmappedreadsRmhost
     task_ReadsUnmappedRmHost --> var_rmhostStat
+    var_DataLine1 --> var_SEfq
+    var_DataLine --> var_raw_fq1
+    var_DataLine --> var_raw_fq2
+    var_raw_fq1 --> var_base
+    var_base --> var_slide
+    var_raw_fq1 --> var_fq2File
+    var_raw_fq2 --> var_fq2File
+    var_whetherPE --> cond_1
+    var_whetherPE --> cond_2
+    var_whetherPE --> cond_3
+    var_whetherPE --> cond_4
+    input_Micro --> cond_5
+    var_DoCellbin --> cond_6
+    var_jobn --> scatter_1
+    var_jobN --> scatter_2
+    cond_1 --> task_SplitBarcodeBin
+    cond_2 --> task_BcNumCountPE
+    cond_2 --> var_PEmem
+    cond_3 --> task_GetExpSE
+    cond_4 --> task_GetExpPE
+    cond_5 --> var_unmappedreadsRmhost
+    cond_5 --> var_rmhostStat
+    cond_5 --> task_MicrobiomeAnalysis
+    cond_6 --> task_CellCut
+    cond_6 --> task_CellCluster
+    scatter_1 --> var_DataLine1
+    scatter_1 --> var_SEfq
+    scatter_2 --> var_DataLine
+    scatter_2 --> var_raw_fq1
+    scatter_2 --> var_raw_fq2
+    scatter_2 --> var_base
+    scatter_2 --> var_slide
+    scatter_2 --> var_fq2File
+    scatter_2 --> var_fq2Size
+    scatter_2 --> task_BarcodeMappingAndStar
     var_dockerUrl --> task_RefRead
     input_sampleid --> task_RefRead
     var_indexid --> task_RefRead
@@ -247,9 +287,9 @@ graph TD
     var_RMrRNA --> task_BarcodeMappingAndStar
     input_Micro --> task_BarcodeMappingAndStar
     input_sampleid --> task_BarcodeMappingAndStar
+    task_BcNumCountSE --> task_BarcodeMappingAndStar
     var_whetherPE --> task_BarcodeMappingAndStar
     task_BcNumCountPE --> task_BarcodeMappingAndStar
-    task_BcNumCountSE --> task_BarcodeMappingAndStar
     input_mask --> task_BarcodeMappingAndStar
     var_raw_fq1 --> task_BarcodeMappingAndStar
     var_raw_fq2 --> task_BarcodeMappingAndStar
@@ -262,8 +302,8 @@ graph TD
     input_CIDStart --> task_BarcodeMappingAndStar
     input_CIDLength --> task_BarcodeMappingAndStar
     var_fq2Size --> task_BarcodeMappingAndStar
-    var_SEmem --> task_BarcodeMappingAndStar
     var_PEmem --> task_BarcodeMappingAndStar
+    var_SEmem --> task_BarcodeMappingAndStar
     var_dockerUrl --> task_BarcodeMappingAndStar
     task_BarcodeMappingAndStar --> task_GetExpSE
     task_RefRead --> task_GetExpSE
@@ -320,8 +360,8 @@ graph TD
     task_CellCut --> task_CellCluster
     var_dockerUrl --> task_CellCluster
     task_GetExpSE --> task_Saturation
-    var_whetherPE --> task_Saturation
     task_GetExpPE --> task_Saturation
+    var_whetherPE --> task_Saturation
     task_TissueCut_vea --> task_Saturation
     var_annoSummary --> task_Saturation
     var_bcStarStat --> task_Saturation
@@ -342,9 +382,9 @@ graph TD
     var_dockerUrl --> task_Report_v2
     task_BarcodeMappingAndStar --> output_out00
     task_MergeBarcodeReadsCount --> output_out01
-    task_GetExpPE --> output_out02
-    var_whetherPE --> output_out02
     task_GetExpSE --> output_out02
+    var_whetherPE --> output_out02
+    task_GetExpPE --> output_out02
     task_MicrobiomeAnalysis --> output_out021
     task_Register_vea --> output_out03
     task_TissueCut_vea --> output_out04
