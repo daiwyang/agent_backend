@@ -135,12 +135,15 @@ class WDLFlowchartGenerator:
         """生成Mermaid样式定义"""
         return [
             "    %% 节点样式定义",
-            "    classDef inputNode fill:#fff9c4,stroke:#f57f17,stroke-width:2px,stroke-dasharray: 5 3",
+            "    classDef inputNode fill:#e0f2f1,stroke:#00695c,stroke-width:2px",
+            "    classDef inputNodeOptional fill:#e0f2f1,stroke:#00695c,stroke-width:2px,stroke-dasharray: 5 3",
             "    classDef outputNode fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px",
+            "    classDef outputNodeOptional fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px,stroke-dasharray: 5 3",
             "    classDef callNode fill:#e3f2fd,stroke:#1976d2,stroke-width:2px",
             "    classDef varNode fill:#f3e5f5,stroke:#7b1fa2,stroke-width:1px",
+            "    classDef varNodeOptional fill:#f3e5f5,stroke:#7b1fa2,stroke-width:1px,stroke-dasharray: 5 3",
             "    classDef conditionalNode fill:#ffecb3,stroke:#f57c00,stroke-width:2px",
-            "    classDef scatterNode fill:#e1f5fe,stroke:#0288d1,stroke-width:2px",
+            "    classDef scatterNode fill:#f8bbd9,stroke:#ad1457,stroke-width:2px",
         ]
 
     def _create_input_nodes(self) -> Tuple[List[str], Set[str]]:
@@ -150,6 +153,8 @@ class WDLFlowchartGenerator:
 
         for input_param in self.workflow_inputs:
             input_name = input_param.get("name")
+            is_optional = input_param.get("optional", False)
+
             if not input_name:
                 continue
 
@@ -157,8 +162,14 @@ class WDLFlowchartGenerator:
             sanitized_id = self._sanitize_node_id(node_id)
             display_name = self._sanitize_text(input_name, 20)
 
-            nodes.append(f'    {sanitized_id}["{display_name}"]')
-            nodes.append(f"    class {sanitized_id} inputNode")
+            nodes.append(f'    {sanitized_id}["Input: {display_name}"]')
+
+            # 根据optional属性设置样式
+            if is_optional:
+                nodes.append(f"    class {sanitized_id} inputNodeOptional")
+            else:
+                nodes.append(f"    class {sanitized_id} inputNode")
+
             node_ids.add(sanitized_id)
 
         return nodes, node_ids
@@ -187,18 +198,29 @@ class WDLFlowchartGenerator:
                     output_groups[prefix] = []
                 output_groups[prefix].append(output)
 
-                # 为每个分组创建输出节点
+            # 为每个分组创建输出节点
             for prefix, outputs in output_groups.items():
                 group_id = f"output_{prefix}"
                 sanitized_id = self._sanitize_node_id(group_id)
 
+                # 检查组内是否有optional输出
+                has_optional = any(output.get("optional", False) for output in outputs)
+
                 nodes.append(f'    {sanitized_id}["Output Group: {prefix} - {len(outputs)} items"]')
-                nodes.append(f"    class {sanitized_id} outputNode")
+
+                # 根据optional属性设置样式
+                if has_optional:
+                    nodes.append(f"    class {sanitized_id} outputNodeOptional")
+                else:
+                    nodes.append(f"    class {sanitized_id} outputNode")
+
                 node_ids.add(sanitized_id)
         else:
             # 正常创建每个输出节点
             for output_param in self.workflow_outputs:
                 output_name = output_param.get("name")
+                is_optional = output_param.get("optional", False)
+
                 if not output_name:
                     continue
 
@@ -207,7 +229,13 @@ class WDLFlowchartGenerator:
                 display_name = self._sanitize_text(output_name, 20)
 
                 nodes.append(f'    {sanitized_id}["{display_name}"]')
-                nodes.append(f"    class {sanitized_id} outputNode")
+
+                # 根据optional属性设置样式
+                if is_optional:
+                    nodes.append(f"    class {sanitized_id} outputNodeOptional")
+                else:
+                    nodes.append(f"    class {sanitized_id} outputNode")
+
                 node_ids.add(sanitized_id)
 
         return nodes, node_ids
@@ -248,6 +276,8 @@ class WDLFlowchartGenerator:
         variable_definitions = self._get_variable_definitions()
         for var_def in variable_definitions:
             var_name = var_def.get("name")
+            is_optional = var_def.get("optional", False)
+
             if not var_name:
                 continue
 
@@ -257,7 +287,13 @@ class WDLFlowchartGenerator:
 
             # 显示变量节点（使用圆角矩形）
             nodes.append(f'    {sanitized_id}("{display_name}")')
-            nodes.append(f"    class {sanitized_id} varNode")
+
+            # 根据optional属性设置样式
+            if is_optional:
+                nodes.append(f"    class {sanitized_id} varNodeOptional")
+            else:
+                nodes.append(f"    class {sanitized_id} varNode")
+
             node_ids.add(sanitized_id)
 
         return nodes, node_ids
@@ -276,7 +312,7 @@ class WDLFlowchartGenerator:
             # 获取条件表达式
             condition = cond_node.get("condition", {})
             condition_expr = condition.get("raw_expression", "condition")
-            display_condition = self._sanitize_text(condition_expr, 30)
+            display_condition = self._sanitize_text(condition_expr, 10)
 
             # 显示条件节点（使用菱形）
             nodes.append(f'    {sanitized_id}{{"{display_condition}"}}')
@@ -463,9 +499,7 @@ class WDLFlowchartGenerator:
                                 # 对于控制结构中的任务，允许输入参数、变量和任务输出的连接
                                 if call_name in tasks_in_control:
                                     # 允许工作流输入参数、变量和任务输出到控制结构中的任务
-                                    if (src_node_id.startswith("input_") or 
-                                        src_node_id.startswith("var_") or 
-                                        src_node_id.startswith("task_")):
+                                    if src_node_id.startswith("input_") or src_node_id.startswith("var_") or src_node_id.startswith("task_"):
                                         edges.append(f"    {src_node_id} --> {task_node_id}")
                                         added_edges.add(edge)
                                 else:
@@ -731,7 +765,7 @@ class WDLFlowchartGenerator:
                         if target_node_id in all_node_ids:
                             edge = (cond_node_id, target_node_id)
                             if edge not in added_edges:
-                                edges.append(f"    {cond_node_id} --> {target_node_id}")
+                                edges.append(f"    {cond_node_id} -.-> {target_node_id}")
                                 added_edges.add(edge)
 
                 elif body_node.get("node_type") == "declaration":
@@ -742,7 +776,7 @@ class WDLFlowchartGenerator:
                         if target_node_id in all_node_ids:
                             edge = (cond_node_id, target_node_id)
                             if edge not in added_edges:
-                                edges.append(f"    {cond_node_id} --> {target_node_id}")
+                                edges.append(f"    {cond_node_id} -.-> {target_node_id}")
                                 added_edges.add(edge)
 
         return edges
@@ -872,7 +906,7 @@ class WDLFlowchartGenerator:
 
 def main():
     """主函数"""
-    json_file = "docs/wdl/SAW-ST-6.1-alpha3-FFPE-early-access.json"
+    json_file = "docs/wdl/SAW-ST-V6-reregist-autotest.json"
 
     try:
         generator = WDLFlowchartGenerator(json_file)
